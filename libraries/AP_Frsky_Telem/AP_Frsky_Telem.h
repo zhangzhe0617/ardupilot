@@ -95,6 +95,9 @@ for FrSky SPort Passthrough
 #define AP_ARMED_OFFSET             8
 #define AP_BATT_FS_OFFSET           9
 #define AP_EKF_FS_OFFSET            10
+#define AP_IMU_TEMP_MIN             19.0f
+#define AP_IMU_TEMP_MAX             82.0f
+#define AP_IMU_TEMP_OFFSET          26
 // for home position related data
 #define HOME_ALT_OFFSET             12
 #define HOME_BEARING_LIMIT          0x7F
@@ -113,18 +116,16 @@ for FrSky SPort Passthrough
 
 class AP_Frsky_Telem {
 public:
-    static AP_Frsky_Telem create(AP_AHRS &ahrs, const AP_BattMonitor &battery, const RangeFinder &rng) {
-        return AP_Frsky_Telem{ahrs, battery, rng};
-    }
-
-    constexpr AP_Frsky_Telem(AP_Frsky_Telem &&other) = default;
+    AP_Frsky_Telem(AP_AHRS &ahrs, const AP_BattMonitor &battery, const RangeFinder &rng);
 
     /* Do not allow copies */
     AP_Frsky_Telem(const AP_Frsky_Telem &other) = delete;
     AP_Frsky_Telem &operator=(const AP_Frsky_Telem&) = delete;
 
     // init - perform required initialisation
-    void init(const AP_SerialManager &serial_manager, const char *firmware_str, const uint8_t mav_type, const AP_Float *fs_batt_voltage = nullptr, const AP_Float *fs_batt_mah = nullptr, const uint32_t *ap_valuep = nullptr);
+    void init(const AP_SerialManager &serial_manager,
+              const uint8_t mav_type,
+              const uint32_t *ap_valuep = nullptr);
 
     // add statustext message to FrSky lib message queue
     void queue_message(MAV_SEVERITY severity, const char *text);
@@ -145,9 +146,9 @@ public:
 
     static ObjectArray<mavlink_statustext_t> _statustext_queue;
 
-private:
-    AP_Frsky_Telem(AP_AHRS &ahrs, const AP_BattMonitor &battery, const RangeFinder &rng);
+    void set_frame_string(const char *string) { _frame_string = string; }
 
+private:
     AP_AHRS &_ahrs;
     const AP_BattMonitor &_battery;
     const RangeFinder &_rng;
@@ -156,11 +157,11 @@ private:
     bool _initialised_uart;
     uint16_t _crc;
 
+    const char *_frame_string;
+
     struct
     {
         uint8_t mav_type; // frame type (see MAV_TYPE in Mavlink definition file common.h)
-        const AP_Float *fs_batt_voltage; // failsafe battery voltage in volts
-        const AP_Float *fs_batt_mah; // failsafe reserve capacity in mAh
     } _params;
     
     struct

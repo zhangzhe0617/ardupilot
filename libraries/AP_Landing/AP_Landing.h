@@ -36,23 +36,13 @@ public:
     FUNCTOR_TYPEDEF(disarm_if_autoland_complete_fn_t, void);
     FUNCTOR_TYPEDEF(update_flight_stage_fn_t, void);
 
-    static AP_Landing create(AP_Mission &_mission, AP_AHRS &_ahrs, AP_SpdHgtControl *_SpdHgt_Controller, AP_Navigation *_nav_controller, AP_Vehicle::FixedWing &_aparm,
+    AP_Landing(AP_Mission &_mission, AP_AHRS &_ahrs, AP_SpdHgtControl *_SpdHgt_Controller, AP_Navigation *_nav_controller, AP_Vehicle::FixedWing &_aparm,
                set_target_altitude_proportion_fn_t _set_target_altitude_proportion_fn,
                constrain_target_altitude_location_fn_t _constrain_target_altitude_location_fn,
                adjusted_altitude_cm_fn_t _adjusted_altitude_cm_fn,
                adjusted_relative_altitude_cm_fn_t _adjusted_relative_altitude_cm_fn,
                disarm_if_autoland_complete_fn_t _disarm_if_autoland_complete_fn,
-               update_flight_stage_fn_t _update_flight_stage_fn) {
-        return AP_Landing{_mission, _ahrs, _SpdHgt_Controller, _nav_controller, _aparm,
-               _set_target_altitude_proportion_fn,
-               _constrain_target_altitude_location_fn,
-               _adjusted_altitude_cm_fn,
-               _adjusted_relative_altitude_cm_fn,
-               _disarm_if_autoland_complete_fn,
-               _update_flight_stage_fn};
-    }
-
-    constexpr AP_Landing(AP_Landing &&other) = default;
+               update_flight_stage_fn_t _update_flight_stage_fn);
 
     /* Do not allow copies */
     AP_Landing(const AP_Landing &other) = delete;
@@ -110,21 +100,13 @@ public:
     bool is_complete(void) const;
     void set_initial_slope(void) { initial_slope = slope; }
     bool is_expecting_impact(void) const;
-    void log(void) const;
+    void Log(void) const;
     const DataFlash_Class::PID_Info * get_pid_info(void) const;
 
     // landing altitude offset (meters)
     float alt_offset;
 
 private:
-    AP_Landing(AP_Mission &_mission, AP_AHRS &_ahrs, AP_SpdHgtControl *_SpdHgt_Controller, AP_Navigation *_nav_controller, AP_Vehicle::FixedWing &_aparm,
-               set_target_altitude_proportion_fn_t _set_target_altitude_proportion_fn,
-               constrain_target_altitude_location_fn_t _constrain_target_altitude_location_fn,
-               adjusted_altitude_cm_fn_t _adjusted_altitude_cm_fn,
-               adjusted_relative_altitude_cm_fn_t _adjusted_relative_altitude_cm_fn,
-               disarm_if_autoland_complete_fn_t _disarm_if_autoland_complete_fn,
-               update_flight_stage_fn_t _update_flight_stage_fn);
-
     struct {
         // denotes if a go-around has been commanded for landing
         bool commanded_go_around:1;
@@ -152,6 +134,9 @@ private:
     adjusted_relative_altitude_cm_fn_t adjusted_relative_altitude_cm_fn;
     disarm_if_autoland_complete_fn_t disarm_if_autoland_complete_fn;
     update_flight_stage_fn_t update_flight_stage_fn;
+    
+    // saved bearing for yaw correction after touchdown
+    float runway_bearing;
 
     // support for deepstall landings
     AP_Landing_Deepstall deepstall;
@@ -170,6 +155,7 @@ private:
     AP_Int8 flap_percent;
     AP_Int8 throttle_slewrate;
     AP_Int8 type;
+    AP_Float touchdown_altitude;
 
     // Land Type STANDARD GLIDE SLOPE
 
@@ -183,8 +169,9 @@ private:
     struct {
         // once landed, post some landing statistics to the GCS
         bool post_stats:1;
-
+        bool force_flare:1;
         bool has_aborted_due_to_slope_recalc:1;
+        bool touched_down:1;
     } type_slope_flags;
 
     void type_slope_do_land(const AP_Mission::Mission_Command& cmd, const float relative_altitude);

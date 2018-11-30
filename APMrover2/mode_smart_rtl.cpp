@@ -14,8 +14,11 @@ bool ModeSmartRTL::_enter()
         return false;
     }
 
-    // RTL never reverses
-    rover.set_reverse(false);
+    // initialise waypoint speed
+    set_desired_speed_to_default(true);
+
+    // init location target
+    set_desired_location(rover.current_loc);
 
     // init state
     smart_rtl_state = SmartRTL_WaitForPathCleanup;
@@ -50,6 +53,7 @@ void ModeSmartRTL::update()
                 _load_point = false;
                 // set target destination to new point
                 if (!set_desired_location_NED(next_point)) {
+                    // this failure should never happen but we add it just in case
                     gcs().send_text(MAV_SEVERITY_INFO, "SmartRTL: failed to set destination");
                     smart_rtl_state = SmartRTL_Failure;
                 }
@@ -60,20 +64,28 @@ void ModeSmartRTL::update()
                 _load_point = true;
             }
             // continue driving towards destination
-            calc_steering_to_waypoint(_origin, _destination);
-            calc_throttle(calc_reduced_speed_for_turn_or_distance(_desired_speed), true);
+            calc_steering_to_waypoint(_origin, _destination, _reversed);
+            calc_throttle(calc_reduced_speed_for_turn_or_distance(_reversed ? -_desired_speed : _desired_speed), true, false);
             break;
 
         case SmartRTL_StopAtHome:
         case SmartRTL_Failure:
             _reached_destination = true;
-            stop_vehicle();
+            if (rover.is_boat()) {
+                // boats attempt to hold position at home
+                calc_steering_to_waypoint(rover.current_loc, _destination, _reversed);
+                calc_throttle(calc_reduced_speed_for_turn_or_distance(_reversed ? -_desired_speed : _desired_speed), true, false);
+            } else {
+                // rovers stop
+                stop_vehicle();
+            }
             break;
     }
 }
 
 // save current position for use by the smart_rtl flight mode
-void ModeSmartRTL::save_position(bool save_pos)
+void ModeSmartRTL::save_position()
 {
+    const bool save_pos = (rover.control_mode != &rover.mode_smartrtl);
     g2.smart_rtl.update(true, save_pos);
 }

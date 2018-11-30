@@ -14,7 +14,7 @@
 */
 void Plane::update_is_flying_5Hz(void)
 {
-    float aspeed;
+    float aspeed=0;
     bool is_flying_bool;
     uint32_t now_ms = AP_HAL::millis();
 
@@ -23,8 +23,16 @@ void Plane::update_is_flying_5Hz(void)
                                     (gps.ground_speed_cm() >= ground_speed_thresh_cm);
 
     // airspeed at least 75% of stall speed?
-    bool airspeed_movement = ahrs.airspeed_estimate(&aspeed) && (aspeed >= (MAX(aparm.airspeed_min,2)*0.75f));
+    const float airspeed_threshold = MAX(aparm.airspeed_min,2)*0.75f;
+    bool airspeed_movement = ahrs.airspeed_estimate(&aspeed) && (aspeed >= airspeed_threshold);
 
+    if (gps.status() < AP_GPS::GPS_OK_FIX_2D && arming.is_armed() && !airspeed_movement && isFlyingProbability > 0.3) {
+        // when flying with no GPS, use the last airspeed estimate to
+        // determine if we think we have airspeed movement. This
+        // prevents the crash detector from triggering when
+        // dead-reckoning under long GPS loss
+        airspeed_movement = aspeed >= airspeed_threshold;
+    }
 
     if (quadplane.is_flying()) {
         is_flying_bool = true;
@@ -150,7 +158,9 @@ void Plane::update_is_flying_5Hz(void)
 #if FRSKY_TELEM_ENABLED == ENABLED
     frsky_telemetry.set_is_flying(new_is_flying);
 #endif
+#if STATS_ENABLED == ENABLED
     g2.stats.set_flying(new_is_flying);
+#endif
 
     crash_detection_update();
 
@@ -208,8 +218,8 @@ void Plane::crash_detection_update(void)
             if (!crash_state.checkedHardLanding && // only check once
                 been_auto_flying &&
                 (labs(ahrs.roll_sensor) > 6000 || labs(ahrs.pitch_sensor) > 6000)) {
+                
                 crashed = true;
-                crash_state.debounce_time_total_ms = CRASH_DETECTION_DELAY_MS;
 
                 // did we "crash" within 75m of the landing location? Probably just a hard landing
                 crashed_near_land_waypoint =
@@ -218,7 +228,8 @@ void Plane::crash_detection_update(void)
                 // trigger hard landing event right away, or never again. This inhibits a false hard landing
                 // event when, for example, a minute after a good landing you pick the plane up and
                 // this logic is still running and detects the plane is on its side as you carry it.
-                crash_state.debounce_timer_ms = now_ms + CRASH_DETECTION_DELAY_MS;
+                crash_state.debounce_timer_ms = now_ms;
+                crash_state.debounce_time_total_ms = 0; // no debounce
             }
 
             crash_state.checkedHardLanding = true;
@@ -265,6 +276,12 @@ void Plane::crash_detection_update(void)
         }
     } else {
         crash_state.checkedHardLanding = false;
+    }
+
+    // if we have no GPS lock and we don't have a functional airspeed
+    // sensor then don't do crash detection
+    if (gps.status() < AP_GPS::GPS_OK_FIX_3D && (!airspeed.use() || !airspeed.healthy())) {
+        crashed = false;
     }
 
     if (!crashed) {

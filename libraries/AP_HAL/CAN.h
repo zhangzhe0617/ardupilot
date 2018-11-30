@@ -32,7 +32,18 @@
 #define MAX_NUMBER_OF_CAN_INTERFACES    2
 #define MAX_NUMBER_OF_CAN_DRIVERS       2
 
-class AP_UAVCAN;
+/**
+ * Interface that CAN protocols need to implement
+ */
+class AP_HAL::CANProtocol {
+public:
+    /* method called when initializing the CAN interfaces
+     *
+     * if initialization doesn't have errors, protocol class
+     * should create a thread to do send and receive operations
+     */
+    virtual void init(uint8_t driver_index) = 0;
+};
 
 /**
  * Single non-blocking CAN interface.
@@ -92,8 +103,10 @@ public:
 /**
  * Generic CAN driver.
  */
-class AP_HAL::CANManager: public uavcan::ICanDriver {
+class AP_HAL::CANManager {
 public:
+    CANManager(uavcan::ICanDriver* driver) : _driver(driver) {}
+
     /*  CAN port open method
      Opens port with specified bit rate
      bitrate - selects the speed that the port will be configured to.  If zero, the port speed is left
@@ -111,10 +124,11 @@ public:
      true - CAN manager is initialized
      */
     virtual bool is_initialized() = 0;
-    virtual void initialized(bool val);
+    virtual void initialized(bool val) = 0;
 
-    virtual AP_UAVCAN *get_UAVCAN(void);
-    virtual void set_UAVCAN(AP_UAVCAN *uavcan);
+    uavcan::ICanDriver* get_driver() { return _driver; }
+private:
+    uavcan::ICanDriver* _driver;
 };
 
 #endif

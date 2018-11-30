@@ -31,11 +31,18 @@ enum gcs_failsafe {
                                  // while in AUTO mode
 };
 
-enum short_failsafe_action {
-    SHORT_FS_ACTION_BESTGUESS = 0,
-    SHORT_FS_ACTION_CIRCLE = 1,
-    SHORT_FS_ACTION_FBWA = 2,
-    SHORT_FS_ACTION_DISABLED = 3,
+enum failsafe_action_short {
+    FS_ACTION_SHORT_BESTGUESS = 0,      // CIRCLE/no change(if already in AUTO|GUIDED|LOITER)
+    FS_ACTION_SHORT_CIRCLE = 1,
+    FS_ACTION_SHORT_FBWA = 2,
+    FS_ACTION_SHORT_DISABLED = 3,
+};
+
+enum failsafe_action_long {
+    FS_ACTION_LONG_CONTINUE = 0,
+    FS_ACTION_LONG_RTL = 1,
+    FS_ACTION_LONG_GLIDE = 2,
+    FS_ACTION_LONG_PARACHUTE = 3,
 };
 
 enum FlightMode {
@@ -109,12 +116,23 @@ typedef enum GeofenceEnableReason {
     GCS_TOGGLED          //Fence enabled/disabled by the GCS via Mavlink
 } GeofenceEnableReason;
 
+// PID broadcast bitmask
+enum tuning_pid_bits {
+    TUNING_BITS_ROLL  = (1 <<  0),
+    TUNING_BITS_PITCH = (1 <<  1),
+    TUNING_BITS_YAW   = (1 <<  2),
+    TUNING_BITS_STEER = (1 <<  3),
+    TUNING_BITS_LAND  = (1 <<  4),
+    TUNING_BITS_ACCZ  = (1 <<  5),
+    TUNING_BITS_END // dummy just used for static checking
+};
+
+static_assert(TUNING_BITS_END <= (1 << 24) + 1, "Tuning bit mask is too large to be set by MAVLink");
 
 // Logging message types
 enum log_messages {
     LOG_CTUN_MSG,
     LOG_NTUN_MSG,
-    LOG_PERFORMANCE_MSG,
     LOG_STARTUP_MSG,
     TYPE_AIRSTART_MSG,
     TYPE_GROUNDSTART_MSG,
@@ -122,7 +140,6 @@ enum log_messages {
     LOG_SONAR_MSG,
     LOG_ARM_DISARM_MSG,
     LOG_STATUS_MSG,
-    LOG_OPTFLOW_MSG,
     LOG_QTUN_MSG,
     LOG_PARAMTUNE_MSG,
     LOG_THERMAL_MSG,
@@ -179,4 +196,10 @@ enum {
     USE_REVERSE_THRUST_CRUISE                   = (1<<8),
     USE_REVERSE_THRUST_FBWB                     = (1<<9),
     USE_REVERSE_THRUST_GUIDED                   = (1<<10),
+};
+
+enum FlightOptions {
+    DIRECT_RUDDER_ONLY   = (1 << 0),
+    CRUISE_TRIM_THROTTLE = (1 << 1),
+    DISABLE_TOFF_ATTITUDE_CHK = (1 << 2),
 };

@@ -49,9 +49,7 @@ class AP_InertialSensor : AP_AccelCal_Client
     friend class AP_InertialSensor_Backend;
 
 public:
-    static AP_InertialSensor create() { return AP_InertialSensor{}; }
-
-    constexpr AP_InertialSensor(AP_InertialSensor &&other) = default;
+    AP_InertialSensor();
 
     /* Do not allow copies */
     AP_InertialSensor(const AP_InertialSensor &other) = delete;
@@ -173,7 +171,7 @@ public:
     /* get_delta_time returns the time period in seconds
      * overwhich the sensor data was collected
      */
-    float get_delta_time() const { return _delta_time; }
+    float get_delta_time() const { return MIN(_delta_time, _loop_delta_t_max); }
 
     // return the maximum gyro drift rate in radians/s/s. This
     // depends on what gyro chips are being used
@@ -189,8 +187,9 @@ public:
     static const struct AP_Param::GroupInfo var_info[];
 
     // set overall board orientation
-    void set_board_orientation(enum Rotation orientation) {
+    void set_board_orientation(enum Rotation orientation, Matrix3f* custom_rotation = nullptr) {
         _board_orientation = orientation;
+        _custom_rotation = custom_rotation;
     }
 
     // return the selected sample rate
@@ -199,7 +198,6 @@ public:
     // return the main loop delta_t in seconds
     float get_loop_delta_t(void) const { return _loop_delta_t; }
 
-    uint16_t error_count(void) const { return 0; }
     bool healthy(void) const { return get_gyro_health() && get_accel_health(); }
 
     uint8_t get_primary_accel(void) const { return _primary_accel; }
@@ -270,7 +268,7 @@ public:
     void acal_update();
 
     // simple accel calibration
-    MAV_RESULT simple_accel_cal(AP_AHRS &ahrs);
+    MAV_RESULT simple_accel_cal();
 
     bool accel_cal_requires_reboot() const { return _accel_cal_requires_reboot; }
 
@@ -296,17 +294,37 @@ public:
         // a function called by the main thread at the main loop rate:
         void periodic();
 
+        bool doing_sensor_rate_logging() const { return _doing_sensor_rate_logging; }
+
         // class level parameters
         static const struct AP_Param::GroupInfo var_info[];
 
         // Parameters
         AP_Int16 _required_count;
         AP_Int8 _sensor_mask;
+        AP_Int8 _batch_options_mask;
+
+        // Parameters controlling pushing data to DataFlash:
+        // Each DF message is ~ 108 bytes in size, so we use about 1kB/s of
+        // logging bandwidth with a 100ms interval.  If we are taking
+        // 1024 samples then we need to send 32 packets, so it will
+        // take ~3 seconds to push a complete batch to the log.  If
+        // you are running a on an FMU with three IMUs then you
+        // will loop back around to the first sensor after about
+        // twenty seconds.
+        AP_Int16 samples_per_msg;
+        AP_Int8 push_interval_ms;
+
         // end Parameters
 
     private:
 
+        enum batch_opt_t {
+            BATCH_OPT_SENSOR_RATE = (1<<0),
+        };
+
         void rotate_to_next_sensor();
+        void update_doing_sensor_rate_logging();
 
         bool should_log(uint8_t instance, IMU_SENSOR_TYPE type);
         void push_data_to_log();
@@ -315,6 +333,7 @@ public:
 
         bool initialised : 1;
         bool isbh_sent : 1;
+        bool _doing_sensor_rate_logging : 1;
         uint8_t instance : 3; // instance we are sending data for
         AP_InertialSensor::IMU_SENSOR_TYPE type : 1;
         uint16_t isb_seqnum;
@@ -326,28 +345,13 @@ public:
         uint32_t last_sent_ms;
 
         // all samples are multiplied by this
-        static const uint16_t multiplier_accel = INT16_MAX/radians(2000);
-        static const uint16_t multiplier_gyro = INT16_MAX/(16*GRAVITY_MSS);
-        uint16_t multiplier = multiplier_accel;
-
-        // push blocks to DataFlash at regular intervals.  each
-        // message is ~ 108 bytes in size, so we use about 1kB/s of
-        // logging bandwidth with a 100ms interval.  If we are taking
-        // 1024 samples then we need to send 32 packets, so it will
-        // take ~3 seconds to push a complete batch to the log.  If
-        // you are running a on an FMU with three IMUs then you
-        // will loop back around to the first sensor after about
-        // twenty seconds.
-        const uint8_t push_interval_ms = 100;
-        const uint16_t samples_per_msg = 32;
+        uint16_t multiplier; // initialised as part of init()
 
         const AP_InertialSensor &_imu;
     };
     BatchSampler batchsampler{*this};
 
 private:
-    AP_InertialSensor();
-
     // load backend drivers
     bool _add_backend(AP_InertialSensor_Backend *backend);
     void _start_backends();
@@ -378,6 +382,7 @@ private:
     // the selected sample rate
     uint16_t _sample_rate;
     float _loop_delta_t;
+    float _loop_delta_t_max;
 
     // Most recent accelerometer reading
     Vector3f _accel[INS_MAX_INSTANCES];
@@ -410,6 +415,14 @@ private:
     Vector3f _delta_angle_acc[INS_MAX_INSTANCES];
     Vector3f _last_delta_angle[INS_MAX_INSTANCES];
     Vector3f _last_raw_gyro[INS_MAX_INSTANCES];
+
+    // bitmask indicating if a sensor is doing sensor-rate sampling:
+    uint8_t _accel_sensor_rate_sampling_enabled;
+    uint8_t _gyro_sensor_rate_sampling_enabled;
+
+    // multipliers for data supplied via sensor-rate logging:
+    uint16_t _accel_raw_sampling_multiplier[INS_MAX_INSTANCES];
+    uint16_t _gyro_raw_sampling_multiplier[INS_MAX_INSTANCES];
 
     // product id
     AP_Int16 _old_product_id;
@@ -463,8 +476,12 @@ private:
     // control enable of fast sampling
     AP_Int8     _fast_sampling_mask;
 
+    // control enable of detected sensors
+    AP_Int8     _enable_mask;
+    
     // board orientation from AHRS
     enum Rotation _board_orientation;
+    Matrix3f* _custom_rotation;
 
     // per-sensor orientation to allow for board type defaults at runtime
     enum Rotation _gyro_orientation[INS_MAX_INSTANCES];
@@ -545,11 +562,11 @@ private:
     AccelCalibrator *_accel_calibrator;
 
     //save accelerometer bias and scale factors
-    void _acal_save_calibrations();
-    void _acal_event_failure();
+    void _acal_save_calibrations() override;
+    void _acal_event_failure() override;
 
     // Returns AccelCalibrator objects pointer for specified acceleromter
-    AccelCalibrator* _acal_get_calibrator(uint8_t i) { return i<get_accel_count()?&(_accel_calibrator[i]):nullptr; }
+    AccelCalibrator* _acal_get_calibrator(uint8_t i) override { return i<get_accel_count()?&(_accel_calibrator[i]):nullptr; }
 
     float _trim_pitch;
     float _trim_roll;
@@ -562,4 +579,8 @@ private:
     uint32_t _gyro_startup_error_count[INS_MAX_INSTANCES];
     bool _startup_error_counts_set;
     uint32_t _startup_ms;
+};
+
+namespace AP {
+    AP_InertialSensor &ins();
 };

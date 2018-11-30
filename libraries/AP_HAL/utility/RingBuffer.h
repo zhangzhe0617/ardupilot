@@ -98,7 +98,11 @@ template <class T>
 class ObjectBuffer {
 public:
     ObjectBuffer(uint32_t _size) {
-        buffer = new ByteBuffer((_size * sizeof(T))+1);
+        // we set size to 1 more than requested as the byte buffer
+        // gives one less byte than requested. We round up to a full
+        // multiple of the object size so that we always get aligned
+        // elements, which makes the readptr() method possible
+        buffer = new ByteBuffer(((_size+1) * sizeof(T)));
     }
     ~ObjectBuffer(void) {
         delete buffer;
@@ -133,6 +137,14 @@ public:
         return buffer->write((uint8_t*)&object, sizeof(T)) == sizeof(T);
     }
 
+    // push N objects
+    bool push(const T *object, uint32_t n) {
+        if (buffer->space() < n*sizeof(T)) {
+            return false;
+        }
+        return buffer->write((uint8_t*)object, n*sizeof(T)) == n*sizeof(T);
+    }
+    
     /*
       throw away an object
      */
@@ -163,12 +175,42 @@ public:
     }
 
     /*
+     * push_force() N objects
+     */
+    bool push_force(const T *object, uint32_t n) {
+        uint32_t _space = buffer->space();
+        if (_space < sizeof(T)*n) {
+            buffer->advance(sizeof(T)*(n-_space));
+        }
+        return push(object, n);
+    }
+    
+    /*
       peek copies an object out without advancing the read pointer
      */
     bool peek(T &object) {
         return buffer->peekbytes((uint8_t*)&object, sizeof(T)) == sizeof(T);
     }
 
+    /*
+      return a pointer to first contiguous array of available
+      objects. Return nullptr if none available
+     */
+    const T *readptr(uint32_t &n) {
+        uint32_t avail_bytes = 0;
+        const T *ret = (const T *)buffer->readptr(avail_bytes);
+        if (!ret || avail_bytes < sizeof(T)) {
+            return nullptr;
+        }
+        n = avail_bytes / sizeof(T);
+        return ret;
+    }
+
+    // advance the read pointer (discarding objects)
+    bool advance(uint32_t n) {
+        return buffer->advance(n * sizeof(T));
+    }
+    
     /* update the object at the front of the queue (the one that would
        be fetched by pop()) */
     bool update(const T &object) {

@@ -23,7 +23,7 @@
 #include <unistd.h>
 
 
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__CYGWIN64__)
 #include <windows.h>
 #include <time.h>
 #include <mmsystem.h>
@@ -54,15 +54,23 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     rate_hz(1200.0f),
     autotest_dir(nullptr),
     frame(frame_str),
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__CYGWIN64__)
     min_sleep_time(20000)
 #else
     min_sleep_time(5000)
 #endif
 {
     // make the SIM_* variables available to simulator backends
-    sitl = (SITL *)AP_Param::find_object("SIM_");
-    parse_home(home_str, home, home_yaw);
+    sitl = AP::sitl();
+
+    if (!parse_home(home_str, home, home_yaw)) {
+        ::printf("Failed to parse home string (%s).  Should be LAT,LON,ALT,HDG e.g. 37.4003371,-122.0800351,0,353\n", home_str);
+    }
+    ::printf("Home: %f %f alt=%fm hdg=%f\n",
+             home.lat*1e-7,
+             home.lng*1e-7,
+             home.alt*0.01,
+             home_yaw);
     location = home;
     ground_level = home.alt * 0.01f;
 
@@ -76,8 +84,7 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     // allow for orientation settings, such as with tailsitters
     enum ap_var_type ptype;
     ahrs_orientation = (AP_Int8 *)AP_Param::find("AHRS_ORIENTATION", &ptype);
-
-    terrain = (AP_Terrain *)AP_Param::find_object("TERRAIN_");
+    terrain = reinterpret_cast<AP_Terrain *>(AP_Param::find_object("TERRAIN_"));
 }
 
 
@@ -90,26 +97,31 @@ bool Aircraft::parse_home(const char *home_str, Location &loc, float &yaw_degree
     char *s = strdup(home_str);
     if (!s) {
         free(s);
+        ::printf("No home string supplied\n");
         return false;
     }
     char *lat_s = strtok_r(s, ",", &saveptr);
     if (!lat_s) {
         free(s);
+        ::printf("Failed to parse latitude\n");
         return false;
     }
     char *lon_s = strtok_r(nullptr, ",", &saveptr);
     if (!lon_s) {
         free(s);
+        ::printf("Failed to parse longitude\n");
         return false;
     }
     char *alt_s = strtok_r(nullptr, ",", &saveptr);
     if (!alt_s) {
         free(s);
+        ::printf("Failed to parse altitude\n");
         return false;
     }
     char *yaw_s = strtok_r(nullptr, ",", &saveptr);
     if (!yaw_s) {
         free(s);
+        ::printf("Failed to parse yaw\n");
         return false;
     }
 
@@ -138,7 +150,8 @@ bool Aircraft::parse_home(const char *home_str, Location &loc, float &yaw_degree
 float Aircraft::ground_height_difference() const
 {
     float h1, h2;
-    if (sitl->terrain_enable && terrain &&
+    if (sitl &&
+        sitl->terrain_enable && terrain &&
         terrain->height_amsl(home, h1, false) &&
         terrain->height_amsl(location, h2, false)) {
         return h2 - h1;
@@ -158,7 +171,7 @@ float Aircraft::hagl() const
 */
 bool Aircraft::on_ground() const
 {
-    return hagl() <= 0;
+    return hagl() <= 0.001f;  // prevent bouncing around ground
 }
 
 /*
@@ -191,7 +204,7 @@ void Aircraft::update_mag_field_bf()
     float intensity;
     float declination;
     float inclination;
-    get_mag_field_ef(location.lat * 1e-7f, location.lng * 1e-7f, intensity, declination, inclination);
+    AP_Declination::get_mag_field_ef(location.lat * 1e-7f, location.lng * 1e-7f, intensity, declination, inclination);
 
     // create a field vector and rotate to the required orientation
     Vector3f mag_ef(1e3f * intensity, 0.0f, 0.0f);
@@ -201,6 +214,11 @@ void Aircraft::update_mag_field_bf()
 
     // calculate frame height above ground
     const float frame_height_agl = fmaxf((-position.z) + home.alt * 0.01f - ground_level, 0.0f);
+
+    if (!sitl) {
+        // running example program
+        return;
+    }
 
     // calculate scaling factor that varies from 1 at ground level to 1/8 at sitl->mag_anomaly_hgt
     // Assume magnetic anomaly strength scales with 1/R**3
@@ -246,7 +264,7 @@ void Aircraft::setup_frame_time(float new_rate, float new_speedup)
 /* adjust frame_time calculation */
 void Aircraft::adjust_frame_time(float new_rate)
 {
-    if (rate_hz != new_rate) {
+    if (!is_equal(rate_hz, new_rate)) {
         rate_hz = new_rate;
         frame_time_us = static_cast<uint64_t>(1.0e6f/rate_hz);
         scaled_frame_time_us = frame_time_us/target_speedup;
@@ -408,7 +426,7 @@ void Aircraft::fill_fdm(struct sitl_fdm &fdm)
         }
     }
     
-    if (last_speedup != sitl->speedup && sitl->speedup > 0) {
+    if (!is_equal(last_speedup, float(sitl->speedup)) && sitl->speedup > 0) {
         set_speedup(sitl->speedup);
         last_speedup = sitl->speedup;
     }
@@ -416,7 +434,7 @@ void Aircraft::fill_fdm(struct sitl_fdm &fdm)
 
 uint64_t Aircraft::get_wall_time_us() const
 {
-#ifdef __CYGWIN__
+#if defined(__CYGWIN__) || defined(__CYGWIN64__)
     static DWORD tPrev;
     static uint64_t last_ret_us;
     if (tPrev == 0) {
@@ -565,7 +583,9 @@ void Aircraft::update_dynamics(const Vector3f &rot_accel)
 void Aircraft::update_wind(const struct sitl_input &input)
 {
     // wind vector in earth frame
-    wind_ef = Vector3f(cosf(radians(input.wind.direction)), sinf(radians(input.wind.direction)), 0) * input.wind.speed;
+    wind_ef = Vector3f(cosf(radians(input.wind.direction))*cosf(radians(input.wind.dir_z)), 
+                       sinf(radians(input.wind.direction))*cosf(radians(input.wind.dir_z)), 
+                       sinf(radians(input.wind.dir_z))) * input.wind.speed;
 
     const float wind_turb = input.wind.turbulence * 10.0f;  // scale input.wind.turbulence to match standard deviation when using iir_coef=0.98
     const float iir_coef = 0.98f;  // filtering high frequencies from turbulence
@@ -584,91 +604,6 @@ void Aircraft::update_wind(const struct sitl_input &input)
             sinf(radians(turbulence_azimuth)) * turbulence_horizontal_speed,
             turbulence_vertical_speed);
     }
-}
-
-/*
- calculate magnetic field intensity and orientation
-*/
-bool Aircraft::get_mag_field_ef(float latitude_deg, float longitude_deg, float &intensity_gauss, float &declination_deg, float &inclination_deg)
-{
-    bool valid_input_data = true;
-
-    /* round down to nearest sampling resolution */
-    int32_t min_lat = static_cast<int32_t>(static_cast<int32_t>(latitude_deg / SAMPLING_RES) * SAMPLING_RES);
-    int32_t min_lon = static_cast<int32_t>(static_cast<int32_t>(longitude_deg / SAMPLING_RES) * SAMPLING_RES);
-
-    /* for the rare case of hitting the bounds exactly
-     * the rounding logic wouldn't fit, so enforce it.
-     */
-
-    /* limit to table bounds - required for maxima even when table spans full globe range */
-    if (latitude_deg <= SAMPLING_MIN_LAT) {
-        min_lat = static_cast<int32_t>(SAMPLING_MIN_LAT);
-        valid_input_data = false;
-    }
-
-    if (latitude_deg >= SAMPLING_MAX_LAT) {
-        min_lat = static_cast<int32_t>(static_cast<int32_t>(latitude_deg / SAMPLING_RES) * SAMPLING_RES - SAMPLING_RES);
-        valid_input_data = false;
-    }
-
-    if (longitude_deg <= SAMPLING_MIN_LON) {
-        min_lon = static_cast<int32_t>(SAMPLING_MIN_LON);
-        valid_input_data = false;
-    }
-
-    if (longitude_deg >= SAMPLING_MAX_LON) {
-        min_lon = static_cast<int32_t>(static_cast<int32_t>(longitude_deg / SAMPLING_RES) * SAMPLING_RES - SAMPLING_RES);
-        valid_input_data = false;
-    }
-
-    /* find index of nearest low sampling point */
-    uint32_t min_lat_index = static_cast<uint32_t>((-(SAMPLING_MIN_LAT) + min_lat)  / SAMPLING_RES);
-    uint32_t min_lon_index = static_cast<uint32_t>((-(SAMPLING_MIN_LON) + min_lon) / SAMPLING_RES);
-
-    /* calculate intensity */
-
-    float data_sw = intensity_table[min_lat_index][min_lon_index];
-    float data_se = intensity_table[min_lat_index][min_lon_index + 1];;
-    float data_ne = intensity_table[min_lat_index + 1][min_lon_index + 1];
-    float data_nw = intensity_table[min_lat_index + 1][min_lon_index];
-
-    /* perform bilinear interpolation on the four grid corners */
-
-    float data_min = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_se - data_sw) + data_sw;
-    float data_max = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_ne - data_nw) + data_nw;
-
-    intensity_gauss = ((latitude_deg - min_lat) / SAMPLING_RES) * (data_max - data_min) + data_min;
-
-    /* calculate declination */
-
-    data_sw = declination_table[min_lat_index][min_lon_index];
-    data_se = declination_table[min_lat_index][min_lon_index + 1];;
-    data_ne = declination_table[min_lat_index + 1][min_lon_index + 1];
-    data_nw = declination_table[min_lat_index + 1][min_lon_index];
-
-    /* perform bilinear interpolation on the four grid corners */
-
-    data_min = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_se - data_sw) + data_sw;
-    data_max = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_ne - data_nw) + data_nw;
-
-    declination_deg = ((latitude_deg - min_lat) / SAMPLING_RES) * (data_max - data_min) + data_min;
-
-    /* calculate inclination */
-
-    data_sw = inclination_table[min_lat_index][min_lon_index];
-    data_se = inclination_table[min_lat_index][min_lon_index + 1];;
-    data_ne = inclination_table[min_lat_index + 1][min_lon_index + 1];
-    data_nw = inclination_table[min_lat_index + 1][min_lon_index];
-
-    /* perform bilinear interpolation on the four grid corners */
-
-    data_min = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_se - data_sw) + data_sw;
-    data_max = ((longitude_deg - min_lon) / SAMPLING_RES) * (data_ne - data_nw) + data_nw;
-
-    inclination_deg = ((latitude_deg - min_lat) / SAMPLING_RES) * (data_max - data_min) + data_min;
-
-    return valid_input_data;
 }
 
 /*
@@ -806,4 +741,24 @@ void Aircraft::extrapolate_sensors(float delta_time)
     velocity_air_bf = dcm.transposed() * velocity_air_ef;
 }
 
+void Aircraft::update_external_payload(const struct sitl_input &input)
+{
+    external_payload_mass = 0;
 
+    // update sprayer
+    if (sprayer && sprayer->is_enabled()) {
+        sprayer->update(input);
+        external_payload_mass += sprayer->payload_mass();
+    }
+
+    // update grippers
+    if (gripper && gripper->is_enabled()) {
+        gripper->set_alt(hagl());
+        gripper->update(input);
+        external_payload_mass += gripper->payload_mass();
+    }
+    if (gripper_epm && gripper_epm->is_enabled()) {
+        gripper_epm->update(input);
+        external_payload_mass += gripper_epm->payload_mass();
+    }
+}

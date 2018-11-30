@@ -27,6 +27,7 @@
 
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_ADSB/AP_ADSB.h>
+#include <AP_Common/Semaphore.h>
 
 // F_RCVRY possible parameter values
 #define AP_AVOIDANCE_RECOVERY_REMAIN_IN_AVOID_ADSB                  0
@@ -189,11 +190,15 @@ private:
     AP_Int8     _fail_time_horizon;
     AP_Int16    _fail_distance_xy;
     AP_Int16    _fail_distance_z;
+    AP_Int16    _fail_altitude_minimum;
 
     AP_Int8     _warn_action;
     AP_Int8     _warn_time_horizon;
     AP_Float    _warn_distance_xy;
     AP_Float    _warn_distance_z;
+
+    // multi-thread support for avoidance
+    HAL_Semaphore_Recursive _rsem;
 };
 
 float closest_distance_between_radial_and_point(const Vector2f &w,

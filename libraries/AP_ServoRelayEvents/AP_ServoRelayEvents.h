@@ -11,18 +11,21 @@
 
 class AP_ServoRelayEvents {
 public:
-    static AP_ServoRelayEvents create(AP_Relay &_relay) {
-        return AP_ServoRelayEvents{_relay};
+    AP_ServoRelayEvents(AP_Relay &_relay)
+        : relay(_relay)
+        , type(EVENT_TYPE_RELAY)
+    {
+        _singleton = this;
     }
-
-    constexpr AP_ServoRelayEvents(AP_ServoRelayEvents &&other) = default;
 
     /* Do not allow copies */
     AP_ServoRelayEvents(const AP_ServoRelayEvents &other) = delete;
     AP_ServoRelayEvents &operator=(const AP_ServoRelayEvents&) = delete;
 
-    // set allowed servo channel mask
-    void set_channel_mask(uint16_t _mask) { mask = _mask; }
+    // get singleton instance
+    static AP_ServoRelayEvents *get_singleton() {
+        return _singleton;
+    }
 
     bool do_set_servo(uint8_t channel, uint16_t pwm);
     bool do_set_relay(uint8_t relay_num, uint8_t state);
@@ -31,20 +34,10 @@ public:
     void update_events(void);
 
 private:
-    AP_ServoRelayEvents(AP_Relay &_relay)
-        : relay(_relay)
-        , mask(0)
-        , type(EVENT_TYPE_RELAY)
-        , start_time_ms(0)
-        , delay_ms(0)
-        , repeat(0)
-        , channel(0)
-        , servo_value(0)
-    {
-    }
+
+    static AP_ServoRelayEvents *_singleton;
 
     AP_Relay &relay;
-    uint16_t mask;
 
     // event control state
     enum event_type { 
@@ -68,4 +61,8 @@ private:
 
 	// PWM for servos
 	uint16_t servo_value;
+};
+
+namespace AP {
+    AP_ServoRelayEvents *servorelayevents();
 };

@@ -72,8 +72,7 @@ const AP_Param::GroupInfo AP_SmartRTL::var_info[] = {
 *    seconds before initiating the return journey.
 */
 
-AP_SmartRTL::AP_SmartRTL(const AP_AHRS& ahrs, bool example_mode) :
-    _ahrs(ahrs),
+AP_SmartRTL::AP_SmartRTL(bool example_mode) :
     _example_mode(example_mode)
 {
     AP_Param::setup_object_defaults(this, var_info);
@@ -93,12 +92,6 @@ void AP_SmartRTL::init()
 
     // check if user has disabled SmartRTL
     if (_points_max == 0 || !is_positive(_accuracy)) {
-        return;
-    }
-
-    // create semaphore
-    _path_sem = hal.util->new_semaphore();
-    if (_path_sem == nullptr) {
         return;
     }
 
@@ -145,14 +138,14 @@ bool AP_SmartRTL::pop_point(Vector3f& point)
     }
 
     // get semaphore
-    if (!_path_sem->take_nonblocking()) {
+    if (!_path_sem.take_nonblocking()) {
         log_action(SRTL_POP_FAILED_NO_SEMAPHORE);
         return false;
     }
 
     // check we have another point
     if (_path_points_count == 0) {
-        _path_sem->give();
+        _path_sem.give();
         return false;
     }
 
@@ -162,19 +155,19 @@ bool AP_SmartRTL::pop_point(Vector3f& point)
     // record count of last point popped
     _path_points_completed_limit = _path_points_count;
 
-    _path_sem->give();
+    _path_sem.give();
     return true;
 }
 
 // clear return path and set home location.  This should be called as part of the arming procedure
-void AP_SmartRTL::reset_path(bool position_ok)
+void AP_SmartRTL::set_home(bool position_ok)
 {
     Vector3f current_pos;
-    position_ok &= _ahrs.get_relative_position_NED_origin(current_pos);
-    reset_path(position_ok, current_pos);
+    position_ok &= AP::ahrs().get_relative_position_NED_origin(current_pos);
+    set_home(position_ok, current_pos);
 }
 
-void AP_SmartRTL::reset_path(bool position_ok, const Vector3f& current_pos)
+void AP_SmartRTL::set_home(bool position_ok, const Vector3f& current_pos)
 {
     if (_path == nullptr) {
         return;
@@ -188,32 +181,36 @@ void AP_SmartRTL::reset_path(bool position_ok, const Vector3f& current_pos)
     reset_simplification();
     reset_pruning();
 
-    // de-activate if no position at take-off
+    // don't continue if no position at take-off
     if (!position_ok) {
-        deactivate(SRTL_DEACTIVATED_BAD_POSITION, "bad position");
         return;
     }
 
     // save current position as first point in path
     if (!add_point(current_pos)) {
-        deactivate(SRTL_ADD_FAILED_NO_SEMAPHORE, "failed to save initial point");
         return;
     }
 
     // successfully added point and reset path
     _last_good_position_ms = AP_HAL::millis();
     _active = true;
+    _home_saved = true;
 }
 
 // call this at 3hz (or higher) regardless of what mode the vehicle is in
 void AP_SmartRTL::update(bool position_ok, bool save_position)
 {
+    // try to save home if not already saved
+    if (position_ok && !_home_saved) {
+        set_home(true);
+    }
+
     if (!_active || !save_position) {
         return;
     }
 
     Vector3f current_pos;
-    position_ok &= _ahrs.get_relative_position_NED_origin(current_pos);
+    position_ok &= AP::ahrs().get_relative_position_NED_origin(current_pos);
     update(position_ok, current_pos);
 }
 
@@ -284,7 +281,7 @@ void AP_SmartRTL::cancel_request_for_thorough_cleanup()
 bool AP_SmartRTL::add_point(const Vector3f& point)
 {
     // get semaphore
-    if (!_path_sem->take_nonblocking()) {
+    if (!_path_sem.take_nonblocking()) {
         log_action(SRTL_ADD_FAILED_NO_SEMAPHORE, point);
         return false;
     }
@@ -293,14 +290,14 @@ bool AP_SmartRTL::add_point(const Vector3f& point)
     if (_path_points_count > 0) {
         const Vector3f& last_pos = _path[_path_points_count-1];
         if (last_pos.distance_squared(point) < sq(_accuracy.get())) {
-            _path_sem->give();
+            _path_sem.give();
             return true;
         }
     }
 
     // check we have space in the path
     if (_path_points_count >= _path_points_max) {
-        _path_sem->give();
+        _path_sem.give();
         log_action(SRTL_ADD_FAILED_PATH_FULL, point);
         return false;
     }
@@ -309,7 +306,7 @@ bool AP_SmartRTL::add_point(const Vector3f& point)
     _path[_path_points_count++] = point;
     log_action(SRTL_POINT_ADD, point);
 
-    _path_sem->give();
+    _path_sem.give();
     return true;
 }
 
@@ -321,14 +318,14 @@ void AP_SmartRTL::run_background_cleanup()
     }
 
     // get semaphore
-    if (!_path_sem->take_nonblocking()) {
+    if (!_path_sem.take_nonblocking()) {
         return;
     }
     // local copy of _path_points_count and _path_points_completed_limit
     const uint16_t path_points_count = _path_points_count;
     const uint16_t path_points_completed_limit = _path_points_completed_limit;
     _path_points_completed_limit = SMARTRTL_POINTS_MAX;
-    _path_sem->give();
+    _path_sem.give();
 
     // check if thorough cleanup is required
     if (_thorough_clean_request_ms > 0) {
@@ -620,7 +617,7 @@ void AP_SmartRTL::reset_pruning()
 void AP_SmartRTL::remove_points_by_simplify_bitmask()
 {
     // get semaphore before modifying path
-    if (!_path_sem->take_nonblocking()) {
+    if (!_path_sem.take_nonblocking()) {
         return;
     }
     uint16_t dest = 1;
@@ -645,7 +642,7 @@ void AP_SmartRTL::remove_points_by_simplify_bitmask()
         deactivate(SRTL_DEACTIVATED_PROGRAM_ERROR, "program error");
     }
 
-    _path_sem->give();
+    _path_sem.give();
 
     // flag point removal is complete
     _simplify.bitmask.setall();
@@ -663,7 +660,7 @@ bool AP_SmartRTL::remove_points_by_loops(uint16_t num_points_to_remove)
     }
 
     // get semaphore before modifying path
-    if (!_path_sem->take_nonblocking()) {
+    if (!_path_sem.take_nonblocking()) {
         return false;
     }
 
@@ -689,7 +686,7 @@ bool AP_SmartRTL::remove_points_by_loops(uint16_t num_points_to_remove)
         } else {
             // this is an error that should never happen so deactivate
             deactivate(SRTL_DEACTIVATED_PROGRAM_ERROR, "program error");
-            _path_sem->give();
+            _path_sem.give();
             // we return true so thorough_cleanup does not get stuck
             return true;
         }
@@ -709,7 +706,7 @@ bool AP_SmartRTL::remove_points_by_loops(uint16_t num_points_to_remove)
         _prune.loops_count--;
     }
 
-    _path_sem->give();
+    _path_sem.give();
     return true;
 }
 

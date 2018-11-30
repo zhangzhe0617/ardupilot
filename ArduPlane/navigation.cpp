@@ -107,13 +107,34 @@ void Plane::calc_airspeed_errors()
     // may be using synthetic airspeed
     ahrs.airspeed_estimate(&airspeed_measured);
 
-    // FBW_B airspeed target
-    if (control_mode == FLY_BY_WIRE_B || 
-        control_mode == CRUISE) {
-        target_airspeed_cm = ((int32_t)(aparm.airspeed_max -
-                                        aparm.airspeed_min) *
-                              channel_throttle->get_control_in()) +
-                             ((int32_t)aparm.airspeed_min * 100);
+    // FBW_B/cruise airspeed target
+    if (!failsafe.rc_failsafe && (control_mode == FLY_BY_WIRE_B || control_mode == CRUISE)) {
+        if (g2.flight_options & FlightOptions::CRUISE_TRIM_THROTTLE) {
+            float control_min = 0.0f;
+            float control_mid = 0.0f;
+            const float control_max = channel_throttle->get_range();
+            const float control_in = get_throttle_input();
+            switch (channel_throttle->get_type()) {
+                case RC_Channel::RC_CHANNEL_TYPE_ANGLE:
+                    control_min = -control_max;
+                    break;
+                case RC_Channel::RC_CHANNEL_TYPE_RANGE:
+                    control_mid = channel_throttle->get_control_mid();
+                    break;
+            }
+            if (control_in <= control_mid) {
+                target_airspeed_cm = linear_interpolate(aparm.airspeed_min * 100, aparm.airspeed_cruise_cm,
+                                                        control_in,
+                                                        control_min, control_mid);
+            } else {
+                target_airspeed_cm = linear_interpolate(aparm.airspeed_cruise_cm, aparm.airspeed_max * 100,
+                                                        control_in,
+                                                        control_mid, control_max);
+            }
+        } else {
+            target_airspeed_cm = ((int32_t)(aparm.airspeed_max - aparm.airspeed_min) *
+                                  get_throttle_input()) + ((int32_t)aparm.airspeed_min * 100);
+        }
 
     } else if (flight_stage == AP_Vehicle::FixedWing::FLIGHT_LAND) {
         // Landing airspeed target
@@ -127,7 +148,9 @@ void Plane::calc_airspeed_errors()
     // Set target to current airspeed + ground speed undershoot,
     // but only when this is faster than the target airspeed commanded
     // above.
-    if (control_mode >= FLY_BY_WIRE_B && (aparm.min_gndspeed_cm > 0)) {
+    if (auto_throttle_mode &&
+    	aparm.min_gndspeed_cm > 0 &&
+    	control_mode != CIRCLE) {
         int32_t min_gnd_target_airspeed = airspeed_measured*100 + groundspeed_undershoot;
         if (min_gnd_target_airspeed > target_airspeed_cm) {
             target_airspeed_cm = min_gnd_target_airspeed;
@@ -135,7 +158,7 @@ void Plane::calc_airspeed_errors()
     }
 
     // Bump up the target airspeed based on throttle nudging
-    if (control_mode >= AUTO && airspeed_nudge_cm > 0) {
+    if (throttle_allows_nudging && airspeed_nudge_cm > 0) {
         target_airspeed_cm += airspeed_nudge_cm;
     }
 
@@ -161,6 +184,8 @@ void Plane::calc_gndspeed_undershoot()
             float gndSpdFwd = yawVect * gndVel;
             groundspeed_undershoot = (aparm.min_gndspeed_cm > 0) ? (aparm.min_gndspeed_cm - gndSpdFwd*100) : 0;
         }
+    } else {
+    	groundspeed_undershoot = 0;
     }
 }
 
@@ -186,7 +211,7 @@ void Plane::update_loiter(uint16_t radius)
             quadplane.guided_start();
         }
     } else if ((loiter.start_time_ms == 0 &&
-                control_mode == AUTO &&
+                (control_mode == AUTO || control_mode == GUIDED) &&
                 auto_state.crosstrack &&
                 get_distance(current_loc, next_WP_loc) > radius*3) ||
                (control_mode == RTL && quadplane.available() && quadplane.rtl_mode == 1)) {
@@ -227,7 +252,7 @@ void Plane::update_cruise()
 {
     if (!cruise_state.locked_heading &&
         channel_roll->get_control_in() == 0 &&
-        rudder_input == 0 &&
+        rudder_input() == 0 &&
         gps.status() >= AP_GPS::GPS_OK_FIX_2D &&
         gps.ground_speed() >= 3 &&
         cruise_state.lock_timer_ms == 0) {

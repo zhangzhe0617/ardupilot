@@ -45,11 +45,11 @@ public:
     static bool detect(AP_SerialManager &serial_manager);
 
     // update state
-    void update(void);
+    void update(void) override;
 
     // get maximum and minimum distances (in meters) of sensor
-    float distance_max() const;
-    float distance_min() const;
+    float distance_max() const override;
+    float distance_min() const override;
 
 private:
     enum rp_state {
@@ -85,15 +85,10 @@ private:
     char _rp_systeminfo[63];
     bool _descriptor_data;
     bool _information_data;
-    bool _payload_data;
     bool _resetted;
     bool _initialised;
-    bool _skip;
-    bool _rp_reset;
     bool _sector_initialised;
 
-    uint8_t _element_len[2];
-    uint8_t _element_num;
     uint8_t _payload_length;
     uint8_t _cnt;
     uint8_t _sync_error ;

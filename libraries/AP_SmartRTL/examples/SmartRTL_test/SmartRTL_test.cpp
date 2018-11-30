@@ -12,26 +12,25 @@
 const AP_HAL::HAL &hal = AP_HAL::get_HAL();
 
 // INS and Baro declaration
-static AP_InertialSensor ins = AP_InertialSensor::create();
-static Compass compass = Compass::create();
-static AP_GPS gps = AP_GPS::create();
-static AP_Baro barometer = AP_Baro::create();
-static AP_SerialManager serial_manager = AP_SerialManager::create();
+static AP_InertialSensor ins;
+static Compass compass;
+static AP_GPS gps;
+static AP_Baro barometer;
+static AP_SerialManager serial_manager;
 
 class DummyVehicle {
 public:
-    RangeFinder rangefinder = RangeFinder::create(serial_manager, ROTATION_PITCH_270);
-    NavEKF2 EKF2 = NavEKF2::create(&ahrs, barometer, rangefinder);
-    NavEKF3 EKF3 = NavEKF3::create(&ahrs, barometer, rangefinder);
-    AP_AHRS_NavEKF ahrs = AP_AHRS_NavEKF::create(ins, barometer, gps, EKF2, EKF3,
-                                                 AP_AHRS_NavEKF::FLAG_ALWAYS_USE_EKF);
+    RangeFinder rangefinder{serial_manager, ROTATION_PITCH_270};
+    NavEKF2 EKF2{&ahrs, rangefinder};
+    NavEKF3 EKF3{&ahrs, rangefinder};
+    AP_AHRS_NavEKF ahrs{EKF2, EKF3, AP_AHRS_NavEKF::FLAG_ALWAYS_USE_EKF};
 };
 
 static DummyVehicle vehicle;
 
 AP_AHRS_NavEKF &ahrs(vehicle.ahrs);
-AP_SmartRTL smart_rtl{ahrs, true};
-AP_BoardConfig board_config = AP_BoardConfig::create();
+AP_SmartRTL smart_rtl{true};
+AP_BoardConfig board_config;
 
 void setup();
 void loop();
@@ -87,7 +86,7 @@ void loop()
 // reset path (i.e. clear path and add home) and upload "test_path_before" to smart_rtl
 void reset()
 {
-    smart_rtl.reset_path(true, Vector3f{0.0f, 0.0f, 0.0f});
+    smart_rtl.set_home(true, Vector3f{0.0f, 0.0f, 0.0f});
     for (Vector3f v : test_path_before) {
         smart_rtl.update(true, v);
     }
@@ -111,7 +110,7 @@ void check_path(const std::vector<Vector3f>& correct_path, const char* test_name
     }
 
     // display overall results
-    hal.console->printf("%s: %s time:%u us\n", test_name, (num_points_match && points_match) ? "success" : "fail", time_us);
+    hal.console->printf("%s: %s time:%u us\n", test_name, (num_points_match && points_match) ? "success" : "fail", (unsigned)time_us);
 
     // display number of points
     hal.console->printf("   expected %u points, got %u\n", (unsigned)correct_path.size(), (unsigned)smart_rtl.get_num_points());

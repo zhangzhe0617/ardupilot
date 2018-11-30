@@ -180,10 +180,37 @@ bool I2CDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint3
 }
 
 AP_HAL::OwnPtr<AP_HAL::I2CDevice>
-I2CDeviceManager::get_device(uint8_t bus, uint8_t address)
+I2CDeviceManager::get_device(uint8_t bus, uint8_t address,
+                             uint32_t bus_clock,
+                             bool use_smbus,
+                             uint32_t timeout_ms)
 {
     auto dev = AP_HAL::OwnPtr<AP_HAL::I2CDevice>(new I2CDevice(bus, address));
     return dev;
 }
 
+/*
+  get mask of bus numbers for all configured I2C buses
+*/
+uint32_t I2CDeviceManager::get_bus_mask(void) const
+{
+    return 0x03;
+}
+
+/*
+  get mask of bus numbers for all configured internal I2C buses
+*/
+uint32_t I2CDeviceManager::get_bus_mask_internal(void) const
+{
+    return 0x01;
+}
+
+/*
+  get mask of bus numbers for all configured external I2C buses
+*/
+uint32_t I2CDeviceManager::get_bus_mask_external(void) const
+{
+    return 0x02;
+}
+    
 }

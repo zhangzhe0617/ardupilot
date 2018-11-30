@@ -26,7 +26,7 @@ class AP_AHRS_View
 {
 public:
     // Constructor
-    AP_AHRS_View(AP_AHRS &ahrs, enum Rotation rotation);
+    AP_AHRS_View(AP_AHRS &ahrs, enum Rotation rotation, float pitch_trim_deg=0);
 
     // update state
     void update(bool skip_ins_update=false);
@@ -145,6 +145,14 @@ public:
         return ahrs.getLastPosDownReset(posDelta);
     }
 
+    // rotate a 2D vector from earth frame to body frame
+    // in result, x is forward, y is right
+    Vector2f rotate_earth_to_body2D(const Vector2f &ef_vector) const;
+
+    // rotate a 2D vector from earth frame to body frame
+    // in input, x is forward, y is right
+    Vector2f rotate_body_to_earth2D(const Vector2f &bf) const;
+    
     // return the average size of the roll/pitch error estimate
     // since last call
     float get_error_rp(void) const {
@@ -180,4 +188,6 @@ private:
         float sin_pitch;
         float sin_yaw;
     } trig;
+
+    float y_angle;
 };
