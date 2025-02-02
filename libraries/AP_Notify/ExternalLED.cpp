@@ -12,6 +12,10 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include "AP_Notify_config.h"
+
+#if AP_NOTIFY_EXTERNALLED_ENABLED
+
 #include "ExternalLED.h"
 
 #include "AP_Notify.h"
@@ -185,7 +189,7 @@ void ExternalLED::update(void)
                 break;
         }
     }else{
-        if (AP_Notify::flags.failsafe_battery || AP_Notify::flags.failsafe_radio) {
+        if (AP_Notify::flags.failsafe_battery || AP_Notify::flags.failsafe_radio || AP_Notify::flags.failsafe_gcs) {
             // radio or battery failsafe indicated by fast flashing
             set_pattern(FAST_FLASH);
         } else {
@@ -242,3 +246,5 @@ void ExternalLED::motor_led2(bool on_off)
 bool ExternalLED::init(void) {return true;}
 void ExternalLED::update(void) {return;}
 #endif
+
+#endif  // AP_NOTIFY_EXTERNALLED_ENABLED

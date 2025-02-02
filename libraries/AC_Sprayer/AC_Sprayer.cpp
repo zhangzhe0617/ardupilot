@@ -1,5 +1,12 @@
-#include <AP_HAL/AP_HAL.h>
+#include "AC_Sprayer_config.h"
+
+#if HAL_SPRAYER_ENABLED
+
 #include "AC_Sprayer.h"
+#include <AP_AHRS/AP_AHRS.h>
+#include <AP_HAL/AP_HAL.h>
+#include <AP_Math/AP_Math.h>
+#include <SRV_Channel/SRV_Channel.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -15,7 +22,7 @@ const AP_Param::GroupInfo AC_Sprayer::var_info[] = {
 
     // @Param: PUMP_RATE
     // @DisplayName: Pump speed
-    // @Description: Desired pump speed when traveling 1m/s expressed as a percentage
+    // @Description: Desired pump speed when travelling 1m/s expressed as a percentage
     // @Units: %
     // @Range: 0 100
     // @User: Standard
@@ -50,13 +57,13 @@ const AP_Param::GroupInfo AC_Sprayer::var_info[] = {
 
 AC_Sprayer::AC_Sprayer()
 {
-    if (_s_instance) {
+    if (_singleton) {
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
         AP_HAL::panic("Too many sprayers");
 #endif
         return;
     }
-    _s_instance = this;
+    _singleton = this;
 
     AP_Param::setup_object_defaults(this, var_info);
 
@@ -74,22 +81,22 @@ AC_Sprayer::AC_Sprayer()
 /*
  * Get the AP_Sprayer singleton
  */
-AC_Sprayer *AC_Sprayer::_s_instance = nullptr;
-AC_Sprayer *AC_Sprayer::get_instance()
+AC_Sprayer *AC_Sprayer::_singleton;
+AC_Sprayer *AC_Sprayer::get_singleton()
 {
-    return _s_instance;
+    return _singleton;
 }
 
-void AC_Sprayer::run(const bool true_false)
+void AC_Sprayer::run(const bool activate)
 {
     // return immediately if no change
-    if (true_false == _flags.running) {
+    if (_flags.running == activate) {
         return;
     }
 
     // set flag indicate whether spraying is permitted:
     // do not allow running to be set to true if we are currently not enabled
-    _flags.running = true_false && _enabled;
+    _flags.running = _enabled && activate;
 
     // turn off the pump and spinner servos if necessary
     if (!_flags.running) {
@@ -99,8 +106,8 @@ void AC_Sprayer::run(const bool true_false)
 
 void AC_Sprayer::stop_spraying()
 {
-    SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_pump, SRV_Channel::SRV_CHANNEL_LIMIT_MIN);
-    SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_spinner, SRV_Channel::SRV_CHANNEL_LIMIT_MIN);
+    SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_pump, SRV_Channel::Limit::MIN);
+    SRV_Channels::set_output_limit(SRV_Channel::k_sprayer_spinner, SRV_Channel::Limit::MIN);
 
     _flags.spraying = false;
 }
@@ -126,7 +133,8 @@ void AC_Sprayer::update()
         // velocity will already be zero but this avoids a coverity warning
         velocity.zero();
     }
-    float ground_speed = norm(velocity.x * 100.0f, velocity.y * 100.0f);
+
+    float ground_speed = velocity.xy().length() * 100.0;
 
     // get the current time
     const uint32_t now = AP_HAL::millis();
@@ -167,7 +175,7 @@ void AC_Sprayer::update()
         _speed_over_min_time = 0;
     }
 
-    // if testing pump output speed as if traveling at 1m/s
+    // if testing pump output speed as if travelling at 1m/s
     if (_flags.testing) {
         ground_speed = 100.0f;
         should_be_spraying = true;
@@ -190,7 +198,8 @@ namespace AP {
 
 AC_Sprayer *sprayer()
 {
-    return AC_Sprayer::get_instance();
+    return AC_Sprayer::get_singleton();
 }
 
 };
+#endif // HAL_SPRAYER_ENABLED

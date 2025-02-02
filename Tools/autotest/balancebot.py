@@ -1,114 +1,121 @@
-#!/usr/bin/env python
+'''
+Drive a BalanceBot in SITL
 
-# Drive balancebot in SITL
+AP_FLAKE8_CLEAN
+
+'''
+
 from __future__ import print_function
 
 import os
-import pexpect
 
-from apmrover2 import AutoTestRover
+from rover import AutoTestRover
 
-from pymavlink import mavutil
+import vehicle_test_suite
+from vehicle_test_suite import NotAchievedException
 
 # get location of scripts
 testdir = os.path.dirname(os.path.realpath(__file__))
 
-# HOME = mavutil.location(-35.362938, 149.165085, 584, 270)
-HOME = mavutil.location(40.071374969556928,
-                        -105.22978898137808,
-                        1583.702759,
-                        246)
-
 
 class AutoTestBalanceBot(AutoTestRover):
-    def __init__(self,
-                 binary,
-                 valgrind=False,
-                 gdb=False,
-                 speedup=10,
-                 frame=None,
-                 params=None,
-                 gdbserver=False,
-                 **kwargs):
-        super(AutoTestBalanceBot, self).__init__(binary,
-                                                 valgrind,
-                                                 gdb,
-                                                 speedup,
-                                                 frame,
-                                                 params,
-                                                 gdbserver,
-                                                 **kwargs)
+
+    def log_name(self):
+        return "BalanceBot"
+
+    def vehicleinfo_key(self):
+        return "Rover"
 
     def init(self):
         if self.frame is None:
             self.frame = 'balancebot'
         super(AutoTestBalanceBot, self).init()
 
-    def drive_mission_balancebot1(self):
-        self.drive_mission(os.path.join(testdir, "balancebot1.txt"))
+    def DO_SET_MODE(self):
+        '''Set mode via MAV_COMMAND_DO_SET_MODE'''
+        self.do_set_mode_via_command_long("HOLD")
+        self.do_set_mode_via_command_long("MANUAL")
 
-    def autotest(self):
-        """Autotest APMrover2 in SITL."""
-        self.check_test_syntax(test_file=os.path.realpath(__file__))
-        if not self.hasInit:
-            self.init()
-        self.progress("Started simulator")
+    def rc_defaults(self):
+        ret = super(AutoTestBalanceBot, self).rc_defaults()
+        ret[3] = 1500
+        return ret
 
-        self.fail_list = []
-        try:
-            self.progress("Waiting for a heartbeat with mavlink protocol %s" %
-                          self.mav.WIRE_PROTOCOL_VERSION)
-            self.mav.wait_heartbeat()
-            self.progress("Setting up RC parameters")
-            self.set_rc_default()
-            self.set_rc(8, 1800)
-            self.progress("Waiting for GPS fix")
-            self.mav.wait_gps_fix()
-            self.homeloc = self.mav.location()
-            self.progress("Home location: %s" % self.homeloc)
-            self.mavproxy.send('switch 6\n')  # Manual mode
-            self.wait_mode('MANUAL')
-
-            self.progress("Waiting reading for arm")
-            self.wait_ready_to_arm()
-            self.arm_vehicle()
-
-            self.run_test("Drive an RTL Mission", self.drive_rtl_mission)
-
-            self.run_test("Drive Mission %s" % "balancebot1.txt",
-                          self.drive_mission_balancebot1)
-
-            self.run_test("Disarm Vehicle", self.disarm_vehicle)
-
-            self.run_test("Get Banner", self.do_get_banner)
-
-            self.run_test("Get Capabilities",
-                          self.do_get_autopilot_capabilities)
-
-            self.run_test("Set mode via MAV_COMMAND_DO_SET_MODE",
-                          lambda: self.do_set_mode_via_command_long("HOLD"))
-
-            self.run_test("Test ServoRelayEvents",
-                          self.test_servorelayevents)
-
-            self.run_test("Download logs", lambda:
-                          self.log_download(
-                              self.buildlogs_path("APMrover2-log.bin"),
-                              upload_logs=len(self.fail_list)>0))
-    #        if not drive_left_circuit(self):
-    #            self.progress("Failed left circuit")
-    #            failed = True
-    #        if not drive_RTL(self):
-    #            self.progress("Failed RTL")
-    #            failed = True
-
-        except pexpect.TIMEOUT:
-            self.progress("Failed with timeout")
-            self.fail_list.append(("*timeout*", None))
-
-        self.close()
-
-        if len(self.fail_list):
-            self.progress("FAILED STEPS: %s" % self.fail_list)
-            return False
+    def is_balancebot(self):
         return True
+
+    def drive_rtl_mission_max_distance_from_home(self):
+        '''maximum distance allowed from home at end'''
+        '''balancebot tends to wander backwards, away from the target'''
+        return 8
+
+    def DriveRTL(self):
+        '''Drive an RTL Mission'''
+        # if we Hold then the balancebot continues to wander
+        # indefinitely at ~1m/s, hence we set to Acro
+        self.set_parameter("MIS_DONE_BEHAVE", 2)
+        super(AutoTestBalanceBot, self).DriveRTL()
+
+    def TestWheelEncoder(self):
+        '''make sure wheel encoders are generally working'''
+        ex = None
+        try:
+            self.set_parameter("WENC_TYPE", 10)
+            self.set_parameter("AHRS_EKF_TYPE", 10)
+            self.reboot_sitl()
+            self.set_parameter("WENC2_TYPE", 10)
+            self.set_parameter("WENC_POS_Y", 0.075)
+            self.set_parameter("WENC2_POS_Y", -0.075)
+            self.reboot_sitl()
+            self.change_mode("HOLD")
+            self.wait_ready_to_arm()
+            self.change_mode("ACRO")
+            self.arm_vehicle()
+            self.set_rc(3, 1600)
+
+            m = self.assert_receive_message('WHEEL_DISTANCE', timeout=5)
+
+            tstart = self.get_sim_time()
+            while True:
+                if self.get_sim_time_cached() - tstart > 10:
+                    break
+                dist_home = self.distance_to_home(use_cached_home=True)
+                m = self.mav.messages.get("WHEEL_DISTANCE")
+                delta = abs(m.distance[0] - dist_home)
+                self.progress("dist-home=%f wheel-distance=%f delta=%f" %
+                              (dist_home, m.distance[0], delta))
+                if delta > 5:
+                    raise NotAchievedException("wheel distance incorrect")
+            self.disarm_vehicle()
+        except Exception as e:
+            self.progress("Caught exception: %s" %
+                          self.get_exception_stacktrace(e))
+            self.disarm_vehicle()
+            ex = e
+        self.reboot_sitl()
+        if ex is not None:
+            raise ex
+
+    def DriveMission(self):
+        '''Drive Mission rover1.txt'''
+        self.drive_mission("balancebot1.txt", strict=False)
+
+    def tests(self):
+        '''return list of all tests'''
+
+        '''note that while AutoTestBalanceBot inherits from Rover we don't
+inherit Rover's tests!'''
+        ret = vehicle_test_suite.TestSuite.tests(self)
+
+        ret.extend([
+            self.DriveRTL,
+            self.DriveMission,
+            self.TestWheelEncoder,
+            self.MAV_CMD_DO_SEND_BANNER,
+            self.DO_SET_MODE,
+            self.ServoRelayEvents,
+        ])
+        return ret
+
+    def default_mode(self):
+        return 'MANUAL'

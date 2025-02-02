@@ -15,7 +15,6 @@
 #pragma once
 
 #include <AP_Common/AP_Common.h>
-#include <AP_HAL/AP_HAL.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
 
@@ -31,17 +30,23 @@ class AP_WheelEncoder
 public:
     friend class AP_WheelEncoder_Backend;
     friend class AP_WheelEncoder_Quadrature;
+    friend class AP_WheelEncoder_SITL_Quadrature;
 
     AP_WheelEncoder(void);
 
     /* Do not allow copies */
-    AP_WheelEncoder(const AP_WheelEncoder &other) = delete;
-    AP_WheelEncoder &operator=(const AP_WheelEncoder&) = delete;
+    CLASS_NO_COPY(AP_WheelEncoder);
+
+    // get singleton instance
+    static AP_WheelEncoder *get_singleton() {
+        return _singleton;
+    }
 
     // WheelEncoder driver types
     enum WheelEncoder_Type : uint8_t {
-        WheelEncoder_TYPE_NONE          = 0,
-        WheelEncoder_TYPE_QUADRATURE    = 1
+        WheelEncoder_TYPE_NONE             =   0,
+        WheelEncoder_TYPE_QUADRATURE       =   1,
+        WheelEncoder_TYPE_SITL_QUADRATURE  =  10,
     };
 
     // The WheelEncoder_State structure is filled in by the backend driver
@@ -62,6 +67,9 @@ public:
     // update state of all sensors. Should be called from main loop
     void update(void);
 
+    // log data to logger
+    void Log_Write() const;
+
     // return the number of wheel encoder sensor instances
     uint8_t num_sensors(void) const { return num_instances; }
 
@@ -77,8 +85,8 @@ public:
     // get the wheel radius in meters
     float get_wheel_radius(uint8_t instance) const;
 
-    // get the position of the wheel associated with the wheel encoder
-    Vector3f get_position(uint8_t instance) const;
+    // return a 3D vector defining the position offset of the center of the wheel in meters relative to the body frame origin
+    const Vector3f &get_pos_offset(uint8_t instance) const;
 
     // get total delta angle (in radians) measured by the wheel encoder
     float get_delta_angle(uint8_t instance) const;
@@ -115,4 +123,13 @@ protected:
     WheelEncoder_State state[WHEELENCODER_MAX_INSTANCES];
     AP_WheelEncoder_Backend *drivers[WHEELENCODER_MAX_INSTANCES];
     uint8_t num_instances;
+    Vector3f pos_offset_zero;   // allows returning position offsets of zero for invalid requests
+
+private:
+
+    static AP_WheelEncoder *_singleton;
 };
+
+namespace AP {
+    AP_WheelEncoder *wheelencoder();
+}

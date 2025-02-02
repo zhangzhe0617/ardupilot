@@ -91,11 +91,11 @@ using namespace Linux;
  *     uint16_t duty = 1823;
  */
 
-static const AP_HAL::HAL &hal = AP_HAL::get_HAL();
+extern const AP_HAL::HAL& hal;
 
 RCOutput_AeroIO::RCOutput_AeroIO()
-    : _freq_buffer(new uint16_t[PWM_CHAN_COUNT])
-    , _duty_buffer(new uint16_t[PWM_CHAN_COUNT])
+    : _freq_buffer(NEW_NOTHROW uint16_t[PWM_CHAN_COUNT])
+    , _duty_buffer(NEW_NOTHROW uint16_t[PWM_CHAN_COUNT])
 {
 }
 

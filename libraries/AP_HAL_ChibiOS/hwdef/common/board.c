@@ -18,6 +18,8 @@
 #include "hal.h"
 #include "usbcfg.h"
 #include "stm32_util.h"
+#include "flash.h"
+#include "watchdog.h"
 
 
 /*===========================================================================*/
@@ -35,7 +37,7 @@
 /**
  * @brief   STM32 GPIO static initialization data.
  */
-#ifdef STM32F100_MCUCONF
+#if defined(STM32F100_MCUCONF) || defined(STM32F103_MCUCONF) || defined(STM32F105_MCUCONF)
 
 const PALConfig pal_default_config =
 {
@@ -46,7 +48,7 @@ const PALConfig pal_default_config =
   {VAL_GPIOE_ODR, VAL_GPIOE_CRL, VAL_GPIOE_CRH},
 };
 
-#else //Other than STM32F1 series
+#else //Other than STM32F1/F3 series
 
 /**
  * @brief   Type of STM32 GPIO port setup.
@@ -169,8 +171,21 @@ static void stm32_gpio_init(void) {
 
   /* Enabling GPIO-related clocks, the mask comes from the
      registry header file.*/
+#if defined(STM32H7)
+#if !EXT_FLASH_SIZE_MB // if we have external flash resetting GPIO might disable all comms with it
+  rccResetAHB4(STM32_GPIO_EN_MASK);
+#endif
+  rccEnableAHB4(STM32_GPIO_EN_MASK, true);
+#elif defined(STM32F3)
+  rccResetAHB(STM32_GPIO_EN_MASK);
+  rccEnableAHB(STM32_GPIO_EN_MASK, true);
+#elif defined(STM32G4) || defined(STM32L4) || defined(STM32L4PLUS)
+  rccResetAHB2(STM32_GPIO_EN_MASK);
+  rccEnableAHB2(STM32_GPIO_EN_MASK, true);
+#else
   rccResetAHB1(STM32_GPIO_EN_MASK);
   rccEnableAHB1(STM32_GPIO_EN_MASK, true);
+#endif
 
   /* Initializing all the defined GPIO ports.*/
 #if STM32_HAS_GPIOA
@@ -214,22 +229,79 @@ static void stm32_gpio_init(void) {
  * @brief   Early initialization code.
  * @details This initialization must be performed just after stack setup
  *          and before any other initialization.
+ *
+ * You must not rely on: 1) BSS variables being cleared 2) DATA Variables being initialized 3) RAM functions to be in RAM
+ * You can rely on: 1) const variables or tables 2) flash code 3) automatic variables
  */
 void __early_init(void) {
-#ifndef STM32F100_MCUCONF
+#if !defined(STM32F1)
   stm32_gpio_init();
 #endif
+#if !HAL_XIP_ENABLED || defined(HAL_FORCE_CLOCK_INIT)
+  // if running from external flash then the clocks must not be reset - instead rely on the bootloader to setup
   stm32_clock_init();
+#endif
+#if defined(HAL_DISABLE_DCACHE)
+  SCB_DisableDCache();
+#endif
+#if defined(STM32H7)
+
+  // ensure ITCM and DTCM are enabled. These could be disabled by the px4
+  // bootloader
+  SCB->ITCMCR |= 1; // ITCM enable
+  SCB->DTCMCR |= 1; // DTCM enable
+
+#ifdef STM32_NOCACHE_MPU_REGION_1
+  // disable cache on configured regions so they can be used for DMA
+  // this requires some coordination with the memory map in the MCU configuration script
+  mpuConfigureRegion(STM32_NOCACHE_MPU_REGION_1,
+                     STM32_NOCACHE_MPU_REGION_1_BASE,
+                     MPU_RASR_ATTR_AP_RW_RW |
+                     MPU_RASR_ATTR_NON_CACHEABLE |
+                     STM32_NOCACHE_MPU_REGION_1_SIZE |
+                     MPU_RASR_ENABLE);
+#endif
+#ifdef STM32_NOCACHE_MPU_REGION_2
+  mpuConfigureRegion(STM32_NOCACHE_MPU_REGION_2,
+                     STM32_NOCACHE_MPU_REGION_2_BASE,
+                     MPU_RASR_ATTR_AP_RW_RW |
+                     MPU_RASR_ATTR_NON_CACHEABLE |
+                     STM32_NOCACHE_MPU_REGION_2_SIZE |
+                     MPU_RASR_ENABLE);
+#endif
+#if defined(DUAL_CORE)
+  stm32_disable_cm4_core(); // disable second core
+#endif
+#endif
 }
 
 void __late_init(void) {
   halInit();
   chSysInit();
+
+  /*
+   * Initialize RNG
+   */
+#if HAL_USE_HW_RNG && defined(RNG)
+  rccEnableAHB2(RCC_AHB2ENR_RNGEN, 0);
+  RNG->CR |= RNG_CR_IE;
+  RNG->CR |= RNG_CR_RNGEN;
+#endif
+
+  stm32_watchdog_save_reason();
+#ifndef HAL_BOOTLOADER_BUILD
+  stm32_watchdog_clear_reason();
+#endif
 #if CH_CFG_USE_HEAP == TRUE
   malloc_init();
 #endif
 #ifdef HAL_USB_PRODUCT_ID
   setup_usb_strings();
+#endif
+
+#ifdef HAL_FLASH_SET_NRST_MODE
+  // ensure NRST_MODE is set correctly
+  stm32_flash_set_NRST_MODE(HAL_FLASH_SET_NRST_MODE);
 #endif
 }
 
@@ -238,11 +310,8 @@ void __late_init(void) {
  * @brief   SDC card detection.
  */
 bool sdc_lld_is_card_inserted(SDCDriver *sdcp) {
-  static bool last_status = false;
-
-  if (blkIsTransferring(sdcp))
-    return last_status;
-  return last_status = (bool)palReadPad(GPIOC, 11);
+    (void)sdcp;
+    return true;
 }
 
 /**

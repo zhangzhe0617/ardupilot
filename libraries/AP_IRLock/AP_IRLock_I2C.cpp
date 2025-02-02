@@ -28,9 +28,9 @@
 
 extern const AP_HAL::HAL& hal;
 
-#define IRLOCK_I2C_ADDRESS		0x54
+#define IRLOCK_I2C_ADDRESS      0x54
 
-#define IRLOCK_SYNC			0xAA55AA55
+#define IRLOCK_SYNC         0xAA55AA55
 
 void AP_IRLock_I2C::init(int8_t bus)
 {
@@ -80,6 +80,7 @@ bool AP_IRLock_I2C::sync_frame_start(void)
 /*
   converts IRLOCK pixels to a position on a normal plane 1m in front of the lens
   based on a characterization of IR-LOCK with the standard lens, focused such that 2.38mm of threads are exposed
+  see: https://github.com/ArduPilot/ardupilot/issues/5232 and https://gist.github.com/jschall/eac130ed9d6e5dcd9ce582f3eeeb3071
  */
 void AP_IRLock_I2C::pixel_to_1M_plane(float pix_x, float pix_y, float &ret_x, float &ret_y)
 {
@@ -137,8 +138,7 @@ void AP_IRLock_I2C::read_frames(void)
         _target_info.timestamp = AP_HAL::millis();
         _target_info.pos_x = 0.5f*(corner1_pos_x+corner2_pos_x);
         _target_info.pos_y = 0.5f*(corner1_pos_y+corner2_pos_y);
-        _target_info.size_x = corner2_pos_x-corner1_pos_x;
-        _target_info.size_y = corner2_pos_y-corner1_pos_y;
+        _target_info.pos_z = 1.0f;
     }
 
 #if 0
@@ -148,7 +148,7 @@ void AP_IRLock_I2C::read_frames(void)
         lastt = _target_info.timestamp;
         printf("pos_x:%.5f pos_y:%.5f size_x:%.6f size_y:%.5f\n", 
                _target_info.pos_x, _target_info.pos_y,
-               _target_info.size_x, _target_info.size_y);
+               (corner2_pos_x-corner1_pos_x), (corner2_pos_y-corner1_pos_y));
     }
 #endif
 }

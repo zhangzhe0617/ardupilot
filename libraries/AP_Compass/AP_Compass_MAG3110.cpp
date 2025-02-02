@@ -12,13 +12,15 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include "AP_Compass_MAG3110.h"
+
+#if AP_COMPASS_MAG3110_ENABLED
+
 #include <utility>
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 #include <stdio.h>
-
-#include "AP_Compass_MAG3110.h"
 
 extern const AP_HAL::HAL &hal;
 
@@ -91,7 +93,7 @@ AP_Compass_Backend *AP_Compass_MAG3110::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev
     if (!dev) {
         return nullptr;
     }
-    AP_Compass_MAG3110 *sensor = new AP_Compass_MAG3110(std::move(dev));
+    AP_Compass_MAG3110 *sensor = NEW_NOTHROW AP_Compass_MAG3110(std::move(dev));
     if (!sensor || !sensor->init(rotation)) {
         delete sensor;
         return nullptr;
@@ -116,12 +118,13 @@ bool AP_Compass_MAG3110::init(enum Rotation rotation)
     read();
     
     /* register the compass instance in the frontend */
-    _compass_instance = register_compass();
+    _dev->set_device_type(DEVTYPE_MAG3110);
+    if (!register_compass(_dev->get_bus_id(), _compass_instance)) {
+        return false;
+    }
+    set_dev_id(_compass_instance, _dev->get_bus_id());
 
     set_rotation(_compass_instance, rotation);
-
-    _dev->set_device_type(DEVTYPE_MAG3110);
-    set_dev_id(_compass_instance, _dev->get_bus_id());
 
     set_external(_compass_instance, true);
 
@@ -135,9 +138,7 @@ bool AP_Compass_MAG3110::_hardware_init()
 {
 
     AP_HAL::Semaphore *bus_sem = _dev->get_semaphore();
-    if (!bus_sem->take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
-        AP_HAL::panic("MAG3110: Unable to get semaphore");
-    }
+    bus_sem->take_blocking();
 
     // initially run the bus at low speed
     _dev->set_speed(AP_HAL::Device::SPEED_LOW);
@@ -220,3 +221,5 @@ void AP_Compass_MAG3110::read()
 
     drain_accumulated_samples(_compass_instance);
 }
+
+#endif  // AP_COMPASS_MAG3110_ENABLED

@@ -1,16 +1,13 @@
 #pragma once
 
-#include <AP_Buffer/AP_Buffer.h>
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/Bitmask.h>
 #include <AP_Math/AP_Math.h>
-#include <AP_AHRS/AP_AHRS.h>
-#include <DataFlash/DataFlash.h>
-#include <GCS_MAVLink/GCS.h>
+#include <AP_Logger/AP_Logger_config.h>
 
 // definitions and macros
 #define SMARTRTL_ACCURACY_DEFAULT        2.0f   // default _ACCURACY parameter value.  Points will be no closer than this distance (in meters) together.
-#define SMARTRTL_POINTS_DEFAULT          150    // default _POINTS parameter value.  High numbers improve path pruning but use more memory and CPU for cleanup. Memory used will be 20bytes * this number.
+#define SMARTRTL_POINTS_DEFAULT          300    // default _POINTS parameter value.  High numbers improve path pruning but use more memory and CPU for cleanup. Memory used will be 20bytes * this number.
 #define SMARTRTL_POINTS_MAX              500    // the absolute maximum number of points this library can support.
 #define SMARTRTL_TIMEOUT                 15000  // the time in milliseconds with no points saved to the path (for whatever reason), before SmartRTL is disabled for the flight
 #define SMARTRTL_CLEANUP_POINT_TRIGGER   50     // simplification will trigger when this many points are added to the path
@@ -44,8 +41,15 @@ public:
     // get a point on the path
     const Vector3f& get_point(uint16_t index) const { return _path[index]; }
 
+    // add point to end of path. returns true on success, false on failure (due to failure to take the semaphore)
+    bool add_point(const Vector3f& point);
+
     // get next point on the path to home, returns true on success
     bool pop_point(Vector3f& point);
+
+    // peek at next point on the path without removing it form the path. Returns true on success
+    // this may fail if the IO thread has taken the path semaphore
+    bool peek_point(Vector3f& point);
 
     // clear return path and set return location if position_ok is true.  This should be called as part of the arming procedure
     // if position_ok is false, SmartRTL will not be available.
@@ -78,28 +82,35 @@ public:
     // run background cleanup - should be run regularly from the IO thread
     void run_background_cleanup();
 
+    // returns true if pilot's yaw input should be used to adjust vehicle's heading
+    bool use_pilot_yaw(void) const;
+
     // parameter var table
     static const struct AP_Param::GroupInfo var_info[];
 
 private:
 
     // enums for logging latest actions
-    enum SRTL_Actions {
-        SRTL_POINT_ADD,
-        SRTL_POINT_PRUNE,
-        SRTL_POINT_SIMPLIFY,
-        SRTL_ADD_FAILED_NO_SEMAPHORE,
-        SRTL_ADD_FAILED_PATH_FULL,
-        SRTL_POP_FAILED_NO_SEMAPHORE,
-        SRTL_DEACTIVATED_INIT_FAILED,
-        SRTL_DEACTIVATED_BAD_POSITION,
-        SRTL_DEACTIVATED_BAD_POSITION_TIMEOUT,
-        SRTL_DEACTIVATED_PATH_FULL_TIMEOUT,
-        SRTL_DEACTIVATED_PROGRAM_ERROR,
+    enum Action : uint8_t {
+        POINT_ADD = 0,
+        POINT_PRUNE = 1,
+        POINT_SIMPLIFY = 2,
+        ADD_FAILED_NO_SEMAPHORE = 3,
+        ADD_FAILED_PATH_FULL = 4,
+        POP_FAILED_NO_SEMAPHORE = 5,
+        PEEK_FAILED_NO_SEMAPHORE = 6,
+        DEACTIVATED_INIT_FAILED = 7,
+        // DEACTIVATED_BAD_POSITION = 8,  unused, but historical
+        DEACTIVATED_BAD_POSITION_TIMEOUT = 9,
+        DEACTIVATED_PATH_FULL_TIMEOUT = 10,
+        DEACTIVATED_PROGRAM_ERROR = 11,
     };
 
-    // add point to end of path
-    bool add_point(const Vector3f& point);
+    // enum for SRTL_OPTIONS parameter
+    enum class Options : int32_t {
+        // bits 1 and 2 are still available, pilot yaw was mapped to bit 2 for symmetry with auto
+        IgnorePilotYaw    = (1U << 2),
+    };
 
     // routine cleanup attempts to remove 10 points (see SMARTRTL_CLEANUP_POINT_MIN definition) by simplification or loop pruning
     void routine_cleanup(uint16_t path_points_count, uint16_t path_points_complete_limit);
@@ -159,15 +170,20 @@ private:
     // get the closest distance between 2 line segments and the point midway between the closest points
     static dist_point segment_segment_dist(const Vector3f& p1, const Vector3f& p2, const Vector3f& p3, const Vector3f& p4);
 
-    // de-activate SmartRTL, send warning to GCS and log to dataflash
-    void deactivate(SRTL_Actions action, const char *reason);
+    // de-activate SmartRTL, send warning to GCS and logger
+    void deactivate(Action action, const char *reason);
 
+#if HAL_LOGGING_ENABLED
     // logging
-    void log_action(SRTL_Actions action, const Vector3f &point = Vector3f());
+    void log_action(Action action, const Vector3f &point = Vector3f()) const;
+#else
+    void log_action(Action action, const Vector3f &point = Vector3f()) const {}
+#endif
 
     // parameters
     AP_Float _accuracy;
     AP_Int16 _points_max;
+    AP_Int32 _options;
 
     // SmartRTL State Variables
     bool _active;       // true if SmartRTL is usable.  may become unusable if the path becomes too long to keep in memory, and too convoluted to be cleaned up, SmartRTL will be permanently deactivated (for the remainder of the flight)
@@ -177,6 +193,7 @@ private:
     uint32_t _last_position_save_ms;    // the system time a position was saved to the path (used for timeout)
     uint32_t _thorough_clean_request_ms;// the last system time the thorough cleanup was requested (set by thorough_cleanup method, used by background cleanup)
     uint32_t _thorough_clean_complete_ms; // set to _thorough_clean_request_ms when the background thread completes the thorough cleanup
+    uint32_t _last_low_space_notify_ms; //last time low on SmartRTL space was notified on Mavlink. Minimum time is required before re-notification to avoid nagging.
     ThoroughCleanupType _thorough_clean_type;   // used by example sketch to test simplify and prune separately
 
     // path variables
@@ -200,7 +217,7 @@ private:
         simplify_start_finish_t* stack;
         uint16_t stack_max;     // maximum number of elements in the _simplify_stack array
         uint16_t stack_count;   // number of elements in _simplify_stack array
-        Bitmask bitmask{SMARTRTL_POINTS_MAX};  // simplify algorithm clears bits for each point that can be removed
+        Bitmask<SMARTRTL_POINTS_MAX> bitmask;  // simplify algorithm clears bits for each point that can be removed
     } _simplify;
 
     // Pruning

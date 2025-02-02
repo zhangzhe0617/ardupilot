@@ -12,28 +12,41 @@
  * You should have received a copy of the GNU General Public License along
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#include <hal.h>
 #include "Device.h"
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/OwnPtr.h>
 #include <stdio.h>
 
-#if HAL_USE_I2C == TRUE || HAL_USE_SPI == TRUE
+#if HAL_USE_I2C == TRUE || HAL_USE_SPI == TRUE || HAL_USE_WSPI == TRUE
 
 #include "Scheduler.h"
 #include "Semaphores.h"
 #include "Util.h"
 #include "hwdef/common/stm32_util.h"
 
+#ifndef HAL_DEVICE_THREAD_STACK
+#define HAL_DEVICE_THREAD_STACK 1024
+#endif
+
 using namespace ChibiOS;
 
-static const AP_HAL::HAL &hal = AP_HAL::get_HAL();
+extern const AP_HAL::HAL& hal;
 
 DeviceBus::DeviceBus(uint8_t _thread_priority) :
         thread_priority(_thread_priority)
 {
-    bouncebuffer_init(&bounce_buffer_tx, 10);
-    bouncebuffer_init(&bounce_buffer_rx, 10);
+    bouncebuffer_init(&bounce_buffer_tx, 10, false);
+    bouncebuffer_init(&bounce_buffer_rx, 10, false);
+}
+
+DeviceBus::DeviceBus(uint8_t _thread_priority, bool axi_sram) :
+        thread_priority(_thread_priority)
+{
+    bouncebuffer_init(&bounce_buffer_tx, 10, axi_sram);
+    bouncebuffer_init(&bounce_buffer_rx, 10, axi_sram);
 }
 
 /*
@@ -54,10 +67,8 @@ void DeviceBus::bus_thread(void *arg)
                     callback->next_usec += callback->period_usec;
                 }
                 // call it with semaphore held
-                if (binfo->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
-                    callback->cb();
-                    binfo->semaphore.give();
-                }
+                WITH_SEMAPHORE(binfo->semaphore);
+                callback->cb();
             }
         }
 
@@ -100,28 +111,33 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(uint32_t pe
         // setup a name for the thread
         const uint8_t name_len = 7;
         char *name = (char *)malloc(name_len);
+        if (name == nullptr){
+            return nullptr;
+        }
         switch (hal_device->bus_type()) {
         case AP_HAL::Device::BUS_TYPE_I2C:
-            snprintf(name, name_len, "I2C:%u",
+            snprintf(name, name_len, "I2C%u",
                      hal_device->bus_num());
             break;
 
         case AP_HAL::Device::BUS_TYPE_SPI:
-            snprintf(name, name_len, "SPI:%u",
+            snprintf(name, name_len, "SPI%u",
                      hal_device->bus_num());
             break;
         default:
             break;
         }
 
-        thread_ctx = chThdCreateFromHeap(NULL,
-                         THD_WORKING_AREA_SIZE(1024),
-                         name,
-                         thread_priority,           /* Initial priority.    */
-                         DeviceBus::bus_thread,    /* Thread function.     */
-                         this);                     /* Thread parameter.    */
+        thread_ctx = thread_create_alloc(THD_WORKING_AREA_SIZE(HAL_DEVICE_THREAD_STACK),
+                                         name,
+                                         thread_priority,           /* Initial priority.    */
+                                         DeviceBus::bus_thread,    /* Thread function.     */
+                                         this);                     /* Thread parameter.    */
+        if (thread_ctx == nullptr) {
+            AP_HAL::panic("Failed to create bus thread %s", name);
+        }
     }
-    DeviceBus::callback_info *callback = new DeviceBus::callback_info;
+    DeviceBus::callback_info *callback = NEW_NOTHROW DeviceBus::callback_info;
     if (callback == nullptr) {
         return nullptr;
     }
@@ -158,15 +174,23 @@ bool DeviceBus::adjust_timer(AP_HAL::Device::PeriodicHandle h, uint32_t period_u
 /*
   setup to use DMA-safe bouncebuffers for device transfers
  */
-void DeviceBus::bouncebuffer_setup(const uint8_t *&buf_tx, uint16_t tx_len,
+bool DeviceBus::bouncebuffer_setup(const uint8_t *&buf_tx, uint16_t tx_len,
                                    uint8_t *&buf_rx, uint16_t rx_len)
 {
     if (buf_rx) {
-        bouncebuffer_setup_read(bounce_buffer_rx, &buf_rx, rx_len);
+        if (!bouncebuffer_setup_read(bounce_buffer_rx, &buf_rx, rx_len)) {
+            return false;
+        }
     }
     if (buf_tx) {
-        bouncebuffer_setup_write(bounce_buffer_tx, &buf_tx, tx_len);
+        if (!bouncebuffer_setup_write(bounce_buffer_tx, &buf_tx, tx_len)) {
+            if (buf_rx) {
+                bouncebuffer_abort(bounce_buffer_rx);
+            }
+            return false;
+        }
     }
+    return true;
 }
 
 /*

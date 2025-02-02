@@ -21,26 +21,24 @@
  *       Sensor is initialized in Continuos mode (10Hz)
  *
  */
-#include <AP_HAL/AP_HAL.h>
+#include "AP_Compass_HMC5843.h"
 
-#ifdef HAL_COMPASS_HMC5843_I2C_ADDR
+#if AP_COMPASS_HMC5843_ENABLED
 
 #include <assert.h>
 #include <utility>
 #include <stdio.h>
 
 #include <AP_Math/AP_Math.h>
-#include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/sparse-endian.h>
-
-#include "AP_Compass_HMC5843.h"
+#include <AP_HAL/AP_HAL.h>
 #include <AP_InertialSensor/AP_InertialSensor.h>
 #include <AP_InertialSensor/AuxiliaryBus.h>
 
 extern const AP_HAL::HAL& hal;
 
 /*
- * Defaul address: 0x1E
+ * Default address: 0x1E
  */
 
 #define HMC5843_REG_CONFIG_A 0x00
@@ -114,12 +112,12 @@ AP_Compass_Backend *AP_Compass_HMC5843::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev
     if (!dev) {
         return nullptr;
     }
-    AP_HMC5843_BusDriver *bus = new AP_HMC5843_BusDriver_HALDevice(std::move(dev));
+    AP_HMC5843_BusDriver *bus = NEW_NOTHROW AP_HMC5843_BusDriver_HALDevice(std::move(dev));
     if (!bus) {
         return nullptr;
     }
 
-    AP_Compass_HMC5843 *sensor = new AP_Compass_HMC5843(bus, force_external, rotation);
+    AP_Compass_HMC5843 *sensor = NEW_NOTHROW AP_Compass_HMC5843(bus, force_external, rotation);
     if (!sensor || !sensor->init()) {
         delete sensor;
         return nullptr;
@@ -128,18 +126,19 @@ AP_Compass_Backend *AP_Compass_HMC5843::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev
     return sensor;
 }
 
+#if AP_INERTIALSENSOR_ENABLED
 AP_Compass_Backend *AP_Compass_HMC5843::probe_mpu6000(enum Rotation rotation)
 {
-    AP_InertialSensor &ins = *AP_InertialSensor::get_instance();
+    AP_InertialSensor &ins = *AP_InertialSensor::get_singleton();
 
     AP_HMC5843_BusDriver *bus =
-        new AP_HMC5843_BusDriver_Auxiliary(ins, HAL_INS_MPU60XX_SPI,
+        NEW_NOTHROW AP_HMC5843_BusDriver_Auxiliary(ins, HAL_INS_MPU60XX_SPI,
                                            HAL_COMPASS_HMC5843_I2C_ADDR);
     if (!bus) {
         return nullptr;
     }
 
-    AP_Compass_HMC5843 *sensor = new AP_Compass_HMC5843(bus, false, rotation);
+    AP_Compass_HMC5843 *sensor = NEW_NOTHROW AP_Compass_HMC5843(bus, false, rotation);
     if (!sensor || !sensor->init()) {
         delete sensor;
         return nullptr;
@@ -147,21 +146,23 @@ AP_Compass_Backend *AP_Compass_HMC5843::probe_mpu6000(enum Rotation rotation)
 
     return sensor;
 }
+#endif
 
 bool AP_Compass_HMC5843::init()
 {
     AP_HAL::Semaphore *bus_sem = _bus->get_semaphore();
 
-    if (!bus_sem || !bus_sem->take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
-        hal.console->printf("HMC5843: Unable to get bus semaphore\n");
+    if (!bus_sem) {
+        DEV_PRINTF("HMC5843: Unable to get bus semaphore\n");
         return false;
     }
+    bus_sem->take_blocking();
 
     // high retries for init
     _bus->set_retries(10);
     
     if (!_bus->configure()) {
-        hal.console->printf("HMC5843: Could not configure the bus\n");
+        DEV_PRINTF("HMC5843: Could not configure the bus\n");
         goto errout;
     }
 
@@ -170,7 +171,7 @@ bool AP_Compass_HMC5843::init()
     }
 
     if (!_calibrate()) {
-        hal.console->printf("HMC5843: Could not calibrate sensor\n");
+        DEV_PRINTF("HMC5843: Could not calibrate sensor\n");
         goto errout;
     }
 
@@ -179,7 +180,7 @@ bool AP_Compass_HMC5843::init()
     }
 
     if (!_bus->start_measurements()) {
-        hal.console->printf("HMC5843: Could not start measurements on bus\n");
+        DEV_PRINTF("HMC5843: Could not start measurements on bus\n");
         goto errout;
     }
 
@@ -193,13 +194,15 @@ bool AP_Compass_HMC5843::init()
     // perform an initial read
     read();
 
-    _compass_instance = register_compass();
+    //register compass instance
+    _bus->set_device_type(DEVTYPE_HMC5883);
+    if (!register_compass(_bus->get_bus_id(), _compass_instance)) {
+        return false;
+    }
+    set_dev_id(_compass_instance, _bus->get_bus_id());
 
     set_rotation(_compass_instance, _rotation);
     
-    _bus->set_device_type(DEVTYPE_HMC5883);
-    set_dev_id(_compass_instance, _bus->get_bus_id());
-
     if (_force_external) {
         set_external(_compass_instance, true);
     }
@@ -208,7 +211,7 @@ bool AP_Compass_HMC5843::init()
     _bus->register_periodic_callback(13333,
                                      FUNCTOR_BIND_MEMBER(&AP_Compass_HMC5843::_timer, void));
 
-    hal.console->printf("HMC5843 found on bus 0x%x\n", (unsigned)_bus->get_bus_id());
+    DEV_PRINTF("HMC5843 found on bus 0x%x\n", (unsigned)_bus->get_bus_id());
     
     return true;
 
@@ -331,9 +334,7 @@ bool AP_Compass_HMC5843::_check_whoami()
         // can't talk on bus
         return false;        
     }
-    if (id[0] != 'H' ||
-        id[1] != '4' ||
-        id[2] != '3') {
+    if (memcmp(id, "H43", 3) != 0) {
         // not a HMC5x83 device
         return false;
     }
@@ -487,6 +488,7 @@ AP_HAL::Device::PeriodicHandle AP_HMC5843_BusDriver_HALDevice::register_periodic
 }
 
 
+#if AP_INERTIALSENSOR_ENABLED
 /* HMC5843 on an auxiliary bus of IMU driver */
 AP_HMC5843_BusDriver_Auxiliary::AP_HMC5843_BusDriver_Auxiliary(AP_InertialSensor &ins, uint8_t backend_id,
                                                                uint8_t addr)
@@ -518,7 +520,9 @@ bool AP_HMC5843_BusDriver_Auxiliary::block_read(uint8_t reg, uint8_t *buf, uint3
          * We can only read a block when reading the block of sample values -
          * calling with any other value is a mistake
          */
-        assert(reg == HMC5843_REG_DATA_OUTPUT_X_MSB);
+        if (reg != HMC5843_REG_DATA_OUTPUT_X_MSB) {
+            return false;
+        }
 
         int n = _slave->read(buf);
         return n == static_cast<int>(size);
@@ -580,5 +584,6 @@ uint32_t AP_HMC5843_BusDriver_Auxiliary::get_bus_id(void) const
 {
     return _bus->get_bus_id();
 }
+#endif  // AP_INERTIALSENSOR_ENABLED
 
-#endif
+#endif  // AP_COMPASS_HMC5843_ENABLED

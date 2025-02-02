@@ -1,5 +1,7 @@
 #include "AP_Baro_Backend.h"
+
 #include <stdio.h>
+#include <AP_Math/AP_Math.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -23,6 +25,15 @@ void AP_Baro_Backend::update_healthy_flag(uint8_t instance)
         (now - _frontend.sensors[instance].last_update_ms < BARO_TIMEOUT_MS) &&
         (now - _frontend.sensors[instance].last_change_ms < BARO_DATA_CHANGE_TIMEOUT_MS) &&
         !is_zero(_frontend.sensors[instance].pressure);
+
+    if (_frontend.sensors[instance].temperature < -200 ||
+        _frontend.sensors[instance].temperature > 200) {
+        // if temperature is way out of range then we likely have bad
+        // data from the sensor, treat is as unhealthy. This is done
+        // so SPI sensors which have no data validity checking can
+        // mark a sensor unhealthy
+        _frontend.sensors[instance].healthy = false;
+    }
 }
 
 void AP_Baro_Backend::backend_update(uint8_t instance)
@@ -56,7 +67,7 @@ void AP_Baro_Backend::_copy_to_frontend(uint8_t instance, float pressure, float 
 static constexpr float FILTER_KOEF = 0.1f;
 
 /* Check that the baro value is valid by using a mean filter. If the
- * value is further than filtrer_range from mean value, it is
+ * value is further than filter_range from mean value, it is
  * rejected. 
 */
 bool AP_Baro_Backend::pressure_ok(float press)

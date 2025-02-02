@@ -17,7 +17,7 @@ public:
     // init() to set initial values from the parameters!
     uint32_t flttime; // seconds in flight (or driving)
     uint32_t runtime; // total wallclock time spent running ArduPilot (seconds)
-    uint32_t reset; // last time parameters were reset
+    uint32_t reset;   // last time AP_Stats parameters were reset (in seconds since AP_Stats Jan 1st 2016)
     uint32_t flttime_boot; // seconds in flight (or driving), at boot
     
     void init();
@@ -32,7 +32,7 @@ public:
     void set_flying(bool b);
 
     // accessor for is_flying
-    bool get_is_flying(void) {
+    bool get_is_flying(void) const {
         return _flying_ms != 0;
     }
 
@@ -67,7 +67,7 @@ private:
 
     void update_flighttime();
     void update_runtime();
-
+    HAL_Semaphore sem;
 };
 
 namespace AP {
