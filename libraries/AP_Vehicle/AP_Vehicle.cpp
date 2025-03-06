@@ -356,6 +356,11 @@ void AP_Vehicle::setup()
 #endif
 
 #if AP_SERIALMANAGER_ENABLED
+#if HAL_WITH_IO_MCU
+    if (BoardConfig.io_enabled()) {
+        serial_manager.set_protocol_and_baud(HAL_UART_IOMCU_IDX, AP_SerialManager::SerialProtocol_IOMCU, 0);
+    }
+#endif
     // initialise serial ports
     serial_manager.init();
 #endif
@@ -624,6 +629,8 @@ const AP_Scheduler::Task AP_Vehicle::scheduler_tasks[] = {
 #endif
     SCHED_TASK(send_watchdog_reset_statustext,         0.1,     20, 225),
 #if HAL_WITH_ESC_TELEM
+    // This update function is responsible for checking timeouts and invalidating the ESC telemetry data.
+    // Be mindful of this if you are planning to reduce the frequency from 100Hz.
     SCHED_TASK_CLASS(AP_ESC_Telem, &vehicle.esc_telem,      update,                  100,  50, 230),
 #endif
 #if AP_SERVO_TELEM_ENABLED
@@ -1049,7 +1056,7 @@ void AP_Vehicle::one_Hz_update(void)
       every 10s check if using a 2M firmware on a 1M board
      */
     if (one_Hz_counter % 10U == 0) {
-#if defined(BOARD_CHECK_F427_USE_1M) && (BOARD_FLASH_SIZE>1024)
+#if defined(BOARD_CHECK_F427_USE_1M) && (HAL_PROGRAM_SIZE_LIMIT_KB>1024)
         if (!hal.util->get_soft_armed() && check_limit_flash_1M()) {
             GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, BOARD_CHECK_F427_USE_1M);
         }
@@ -1060,7 +1067,7 @@ void AP_Vehicle::one_Hz_update(void)
       every 30s check if using a 1M firmware on a 2M board
      */
     if (one_Hz_counter % 30U == 0) {
-#if defined(BOARD_CHECK_F427_USE_1M) && (BOARD_FLASH_SIZE<=1024)
+#if defined(BOARD_CHECK_F427_USE_1M) && (HAL_PROGRAM_SIZE_LIMIT_KB<=1024)
         if (!hal.util->get_soft_armed() && !check_limit_flash_1M()) {
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, BOARD_CHECK_F427_USE_2M);
         }

@@ -946,6 +946,7 @@ public:
     AP_Int16 final_wp_dist;
     AP_Int16 landing_dir_off;
     AP_Int8  options;
+    AP_Int16 terrain_alt_min;
 
     // Bitfields of AUTOLAND_OPTIONS
     enum class AutoLandOption {
@@ -953,6 +954,7 @@ public:
     };
 
     enum class AutoLandStage {
+        CLIMB,
         LOITER,
         LANDING
     };
@@ -963,6 +965,7 @@ public:
 
 protected:
     bool _enter() override;
+    AP_Mission::Mission_Command cmd_climb;
     AP_Mission::Mission_Command cmd_loiter;
     AP_Mission::Mission_Command cmd_land;
     Location land_start;

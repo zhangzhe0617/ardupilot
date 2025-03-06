@@ -496,10 +496,6 @@ private:
     // arm_time_ms - Records when vehicle was armed. Will be Zero if we are disarmed.
     uint32_t arm_time_ms;
 
-    // Used to exit the roll and pitch auto trim function
-    uint8_t auto_trim_counter;
-    bool auto_trim_started = false;
-
     // Camera
 #if AP_CAMERA_ENABLED
     AP_Camera camera{MASK_LOG_CAMERA};
@@ -632,7 +628,6 @@ private:
         DISABLE_THRUST_LOSS_CHECK     = (1<<0),   // 1
         DISABLE_YAW_IMBALANCE_WARNING = (1<<1),   // 2
         RELEASE_GRIPPER_ON_THRUST_LOSS = (1<<2),  // 4
-        REQUIRE_POSITION_FOR_ARMING =   (1<<3),   // 8
     };
 
     // type of fast rate attitude controller in operation
@@ -997,11 +992,6 @@ private:
 
     // takeoff_check.cpp
     void takeoff_check();
-
-    // RC_Channel.cpp
-    void save_trim();
-    void auto_trim();
-    void auto_trim_cancel();
 
     // system.cpp
     void init_ardupilot() override;

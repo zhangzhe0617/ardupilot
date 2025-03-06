@@ -7,7 +7,6 @@ Parameters are in-code defaults plus default_params/sub.parm
 AP_FLAKE8_CLEAN
 '''
 
-from __future__ import print_function
 import os
 import sys
 
@@ -992,6 +991,86 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
                 }, epsilon=10) # allow rounding
                 seen_3 = True
 
+    def wait_for_stop(self):
+        """Watch the sub slow down and stop"""
+        tstart = self.get_sim_time_cached()
+        lstart = self.mav.location()
+
+        dmax = 0
+        dprev = 0
+
+        while True:
+            self.delay_sim_time(1)
+
+            dcurr = self.get_distance(lstart, self.mav.location())
+
+            if dcurr - dmax < -0.2:
+                raise NotAchievedException("Bounced back from %.2fm to %.2fm" % (dmax, dcurr))
+            if dcurr > dmax:
+                dmax = dcurr
+
+            if abs(dcurr - dprev) < 0.1:
+                self.progress("Stopping distance %.2fm, less than %.2fs" % (dcurr, self.get_sim_time_cached() - tstart))
+                return
+
+            if self.get_sim_time_cached() - tstart > 10:
+                raise NotAchievedException("Took to long to stop")
+
+            dprev = dcurr
+
+    def PosHoldBounceBack(self):
+        """Test for bounce back in POSHOLD mode"""
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+
+        # dive a little
+        self.set_rc(Joystick.Throttle, 1300)
+        self.delay_sim_time(3)
+        self.set_rc(Joystick.Throttle, 1500)
+        self.delay_sim_time(2)
+
+        # hold position
+        self.change_mode('POSHOLD')
+
+        for pilot_speed in range(50, 251, 100):
+            # set max speed
+            self.set_parameter('PILOT_SPEED', pilot_speed)
+
+            # try different stick values, resulting speed is ~ max_speed * effort * gain
+            for pwm in range(1700, 1901, 100):
+                self.progress('PILOT_SPEED %d, forward pwm %d' % (pilot_speed, pwm))
+                self.set_rc(Joystick.Forward, pwm)
+                self.delay_sim_time(3)
+                self.set_rc(Joystick.Forward, 1500)
+                self.wait_for_stop()
+
+        self.disarm_vehicle()
+
+    def SHT3X(self):
+        '''test for the SHT3X temperature/hygro driver'''
+        self.set_parameters({
+            'TEMP1_TYPE': 8,
+            'TEMP1_ADDR': 0x44,
+            'TEMP_LOG': 1,
+        })
+        self.reboot_sitl()
+        self.context_push()
+        self.set_parameter('LOG_DISARMED', 1)
+        self.delay_sim_time(10)
+        self.context_pop()
+
+        dfreader = self.dfreader_for_current_onboard_log()
+        while True:
+            m = dfreader.recv_match(type='TEMP')
+            if m is None:
+                break
+            self.progress(m)
+            if m.Temp > 15 or m.Temp < 30:
+                # success!
+                break
+        if m is None:
+            raise NotAchievedException("Did not get good TEMP message")
+
     def tests(self):
         '''return list of all tests'''
         ret = super(AutoTestSub, self).tests()
@@ -1024,6 +1103,8 @@ class AutoTestSub(vehicle_test_suite.TestSuite):
             self.BackupOrigin,
             self.FuseMag,
             self.INA3221,
+            self.PosHoldBounceBack,
+            self.SHT3X,
         ])
 
         return ret
